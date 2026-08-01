@@ -3,7 +3,10 @@ services:
     build:
       context: .
     container_name: circlemud
-    restart: unless-stopped
+    # NOTE: 'restart: unless-stopped' removed on purpose. On a Docker/WSL restart
+    # it auto-started the container BEFORE the WSL bind mount was ready, so it
+    # re-seeded a BLANK world and wiped the live character. Start it manually
+    # instead:  docker compose up -d   (from this folder, inside WSL).
     ports:
       - "4000:4000"
     volumes:
