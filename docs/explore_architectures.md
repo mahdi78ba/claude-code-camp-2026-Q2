@@ -186,3 +186,85 @@ it scales from simple goals to long ones.
 **Agent Skills improve connection reliability, but a custom agent loop is still
 needed** for adaptive planning, scalable memory, observability, and long-running
 gameplay.
+
+---
+
+# Architecture 3A — Sub-agent (SDK)
+
+## The experiment
+
+Repackage the same PlayMUD logic as a **sub-agent** — a single Markdown file at
+`.claude/agents/play-mud.md` that the main agent **dispatches to** — instead of a
+Skill loaded into the main agent's own context.
+
+- **Location:** `week0_explore/explore_architecture/03_subagent_sdk`
+- **Structure:** `.claude/agents/play-mud.md` (the sub-agent), with the shared
+  `scripts/` (the `mud.py` engine) and `data/` (memory) moved to the **project
+  root** and the file references updated to match.
+- **Same engine:** the `mud.py` transport (batch mode, auto-login, IAC handling)
+  and the `player.md` / `world.md` memory loop carry over from Architecture 2.
+- **Goals tested:** return the player to the Temple, then navigate to the bakery.
+
+## What we observed
+
+- **Behavior matched Architecture 2.** Reliable connect/login with no throwaway
+  script rewrites; the memory loop read state first and treated the game as the
+  source of truth (it re-checked HP rather than trusting a stale `1/25`); rooms
+  were recorded by name + exits. Same "find the bakery" outcome and comparable
+  time — ~3 min for the bakery leg, with a separate ~9 min that was **game
+  regen-tick waiting**, not agent thrashing.
+- **The real difference is context isolation.** The sub-agent runs in its **own
+  isolated context** and returns only a **summary** to the caller — the play-mud
+  transcript never fills the main agent's context. Each dispatch also reported its
+  own budget (e.g. *"16 tool uses · 32.6k tokens · 9m 2s"*).
+
+## Technical observations
+
+- **Cleaner main context + built-in accounting.** Isolation keeps the main agent
+  uncluttered as goals stack up, and the per-dispatch **token/tool/time summary**
+  is a first step toward the observability Architecture 2 was missing.
+- **Trade-off: less live visibility.** Because only a summary returns, the caller
+  **cannot watch the play unfold step by step** — real-time observability of
+  individual moves moves *into* the sub-agent, out of the main context.
+- **The core gaps remain.** Same `mud.py` + markdown memory, so the deeper
+  Architecture 2 limitations are unchanged: no visible up-front plan, markdown
+  state without identity keys, and the long-goal planning ceiling.
+
+## Concurrent execution (tasks 6–7)
+
+The sub-agent's real edge over a Skill is **running several at once.** We created a
+second character (`Smarty`, a Mage) and a second sub-agent (`play-mud-smarty`) with
+its own memory files, then dispatched both in parallel.
+
+- **Two independent sessions ran side by side.** `Smarty` logged in (level-1
+  Apprentice of Magic) and walked Temple → **Mages' Guild** on its own, while the
+  `dummy` sub-agent ran separately — confirming genuinely concurrent, isolated
+  sessions.
+- **Guild entrances are class-restricted.** Each character trains only at its own
+  class guild (`Dummy → Warrior → Guild of Swordsmen`, `Smarty → Mage → Mages'
+  Guild`); a guild guard blocks the wrong class.
+- **Two operational gotchas surfaced:** a new sub-agent file is **not recognized
+  until Claude Code restarts** (the agent registry loads at startup), and creating a
+  character requires **completing the whole flow and entering the game**, or it is
+  not saved.
+- **Cost/observability, felt directly:** parallel agents **multiply token usage**,
+  and one agent got **stuck passively polling** and silently burned tokens until we
+  manually stopped it — a live demonstration of the missing observability the earlier
+  architectures flagged.
+
+## Architecture conclusions
+
+- **Agent Skills and Sub-agents provide similar functionality for single-agent
+  workflows.**
+- The **primary advantage of Sub-agents is concurrent execution.**
+- **Multiple player sessions can run independently at the same time.**
+- **Shared player/world memory becomes a limitation** once multiple agents are
+  active — we had to split memory into `-smarty` copies to avoid collisions.
+- Larger multi-agent systems would benefit from **isolated state per agent.**
+
+## Key takeaway
+
+**Filesystem sub-agents offer little advantage over Agent Skills for single-agent
+workflows**, but they become genuinely useful when **orchestrating multiple agents
+that operate concurrently** — at which point **per-agent isolated state and
+observability** are the next things to solve.

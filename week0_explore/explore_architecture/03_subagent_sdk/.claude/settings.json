@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(data/player.md)",
+      "Edit(data/world.md)",
+      "Edit(data/player-smarty.md)",
+      "Edit(data/world-smarty.md)",
+      "Bash(python3 scripts/mud.py --cmds \"n;look;score\" --no-quit)",
+      "Bash(python3 scripts/mud.py --cmds \"w;look;score\" --no-quit)",
+      "Bash(python3 scripts/mud.py --cmds \"rest;score;score;score;score;score;score;score;score;score;score;stand;score\" --delay 10 --no-quit)"
+    ]
+  }
+}
