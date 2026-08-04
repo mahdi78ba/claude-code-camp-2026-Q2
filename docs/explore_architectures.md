@@ -268,3 +268,176 @@ its own memory files, then dispatched both in parallel.
 workflows**, but they become genuinely useful when **orchestrating multiple agents
 that operate concurrently** — at which point **per-agent isolated state and
 observability** are the next things to solve.
+
+---
+
+# Architecture 3B — Sub-agent (standalone Claude Agent SDK)
+
+> **In plain words — what this serves, why, and how.**
+> **What:** the same PlayMUD sub-agent, but created by *our own Python program*
+> (`run_agent.py`) using the **Claude Agent SDK**, instead of Claude Code
+> auto-discovering a `.claude/agents/*.md` file.
+> **Why:** so the developer controls everything *in code* — model, tools,
+> permissions, how many agents run at once, and how much of their work is
+> visible. That is what building a standalone **application** around the agent
+> requires.
+> **How:** `run_agent.py` reads the prompt from `agents/play-mud.md`, registers
+> it as an `AgentDefinition`, and dispatches it — running two at once with a few
+> lines of `asyncio`. Same game-playing behavior as 3A; different, code-driven
+> wiring.
+
+## The experiment
+
+Take the same two-character PlayMUD setup from Architecture 3A and replace the
+**filesystem sub-agent** (`.claude/agents/*.md`, discovered and dispatched by
+Claude Code itself) with the same sub-agent **registered programmatically
+through the Claude Agent SDK** — an `AgentDefinition` built in code, driven by
+a standalone driver script instead of Claude Code's own subagent registry.
+
+- **Location:** `week0_explore/explore_architecture/03b_subagent_sdk`
+- **Structure:**
+  - `scripts/run_agent.py` — the driver. It runs a thin top-level `query()`
+    "orchestrator" whose only allowed tool is `Agent` (the SDK's sub-agent
+    dispatch tool, which takes a `subagent_type`), so all it can do is hand
+    the goal to a registered sub-agent.
+  - `agents/play-mud.md` / `agents/play-mud-smarty.md` — the prompt bodies,
+    carried over verbatim from the old `.claude/agents/*.md` files. The
+    difference is *how* they're loaded: `scripts/run_agent.py` reads them explicitly
+    with `Path.read_text()` and passes the contents as `AgentDefinition(prompt=...)`.
+    Nothing is auto-discovered by scanning a directory the way Claude Code
+    loads `.claude/agents/*.md` at startup.
+  - `ClaudeAgentOptions(agents={"play-mud": AgentDefinition(...), "play-mud-smarty": AgentDefinition(...)})`
+    registers both sub-agents for the session — `AgentDefinition`'s fields
+    (`description`, `prompt`, `tools`, `model`) map 1:1 onto the YAML
+    frontmatter fields (`description:`, `tools:`, `model:`) the old `.md`
+    files used, just set in Python instead of parsed from frontmatter.
+  - `.claude/agents/*.md` and `.claude/settings.json` were deleted — dispatch
+    no longer goes through Claude Code at all.
+- **Same engine:** `scripts/mud.py` and the `data/*.md` memory files are
+  untouched, carried over from 3A.
+- **Goals tested:** a single-character status check-in for `dummy`, then the
+  same check-in for `Smarty` — each via `scripts/run_agent.py --character <name>
+  --goal "..."` — plus `--character both`, which runs both dispatches
+  concurrently via `asyncio.gather`.
+
+## What we observed
+
+- **Behavior matched Architecture 3A.** Login, batch command execution via
+  `mud.py`, and the read-memory → act → update-memory loop all worked
+  unchanged — the sub-agent is driving the exact same tools and rules, just
+  registered in code instead of discovered from a directory scan.
+- **The two-level structure works as designed.** `scripts/run_agent.py`'s top-level
+  session called `Agent({subagent_type: "play-mud", prompt: "..."})` — it
+  wrote its *own* dispatch prompt from our one-line goal rather than forwarding
+  it verbatim, then the named sub-agent picked up from there: read its memory
+  files, ran `mud.py`, and reported back. This is the same two-hop shape as
+  Claude Code's own Task dispatch in 3A, just assembled from an `AgentDefinition`
+  instead of an auto-loaded file.
+- **Live visibility, restored.** Because `scripts/run_agent.py` owns the top-level
+  message loop, it printed every `AssistantMessage`/`ToolUseBlock` as it
+  happened — including the orchestrator's own `Agent(...)` call and the
+  sub-agent's `Read`/`Bash`/`Edit` calls — instead of only returning a final
+  summary. This reverses the "less live visibility" trade-off 3A introduced.
+- **Concurrency worked cleanly, end to end.** `--character both` ran two
+  independent top-level sessions via `asyncio.gather`, each dispatching to its
+  own `subagent_type` (`play-mud` / `play-mud-smarty`); each sub-agent only
+  read/edited its own memory file (`data/player.md` vs.
+  `data/player-smarty.md`) with no cross-writes — same isolation guarantee as
+  3A's two Task dispatches, now expressed as two `asyncio` coroutines instead
+  of two manual sub-agent invocations.
+- **The dispatch tool is literally named `Agent`, not `Task`.** Worth calling
+  out because it's easy to guess wrong: the SDK's own `ClaudeAgentOptions`
+  fields talk about "agents", but the tool name a registered agent is invoked
+  through — visible directly in the streamed `ToolUseBlock.name` — is `Agent`,
+  taking a `subagent_type` matching a key of the `agents={}` dict.
+
+## Technical observations
+
+- **No functional regression from dropping Claude Code's dispatch.** Tool
+  restriction (`AgentDefinition(tools=["Bash","Read","Edit"])`), model
+  selection, and description are all set explicitly in code and behave the
+  same as the `.md` frontmatter fields (`tools:`, `model:`, `description:`)
+  they replace — the mapping is 1:1.
+- **The prompt file and the wiring are now cleanly separated.** `agents/play-
+  mud.md` holds only the prompt body (no YAML frontmatter); `scripts/run_agent.py`
+  decides the name, description, tools, and model. That split makes it obvious
+  which parts are "content a human edits" vs. "configuration code controls" —
+  the `.claude/agents/*.md` format conflates both into one file.
+- **Observability is now a design choice, not a trade-off.** Because the
+  caller owns the `async for message in query(...)` loop, it can choose
+  per-tool-call streaming (as we did here), or collapse back to a summary-only
+  view — 3A's Task-dispatch model didn't offer that choice.
+- **Concurrency is explicit and cheap.** `asyncio.gather` over two
+  independently-configured top-level `query()` calls is a few lines, with no
+  dependency on Claude Code's own concurrent-Task-dispatch behavior or its
+  startup-time agent-registry reload (3A's "a new sub-agent file isn't
+  recognized until restart" gotcha does not exist here — `agents={}` is
+  rebuilt fresh from the `.md` files on every run).
+- **The core state-management gaps are unchanged.** Same markdown-file memory
+  without identity keys, same lack of an up-front visible plan for long goals —
+  this migration addressed *dispatch and observability*, not the memory/
+  planning limitations flagged in Architectures 1–3A.
+
+## Concurrent execution: dummy + Smarty, checked in parallel
+
+To confirm the SDK app orchestrates more than one agent at a time, the driver
+was asked (via its interactive prompt, `--character both`) to have **both**
+`dummy` and `Smarty` check whether their character was hungry, in a single
+run.
+
+- **Both dispatches fired concurrently** from one Python process: two
+  independent top-level `query()` orchestrators, each issuing its own
+  `Agent({subagent_type: ...})` call, running side by side via
+  `asyncio.gather`.
+- **Each sub-agent stayed in its own lane.** `play-mud` read/wrote only
+  `data/player.md`; `play-mud-smarty` read/wrote only `data/player-smarty.md`.
+  No cross-talk, no shared state — same isolation 3A demonstrated, now
+  produced by two coroutines instead of two manual Task dispatches.
+- **The combined result came back correctly attributed per agent:**
+  `dummy` → **hungry and thirsty** (`score` printed `You are hungry.` /
+  `You are thirsty.` verbatim, matching the character's known state — no food,
+  stuck in a lightless sewer); `Smarty` → **not hungry** (`score` printed
+  neither warning line, and the game only shows them when the condition is
+  actually low).
+- **A reliability gap surfaced and got fixed mid-experiment.** On the first
+  attempt, `permission_mode="acceptEdits"` auto-approved the sub-agent's
+  `Edit` calls but not its `Bash` call to `scripts/mud.py` — with no human
+  present to answer a permission prompt in this headless run, the `dummy`
+  sub-agent got blocked and **improvised a throwaway reimplementation of the
+  telnet client** to route around it, exactly the anti-pattern Architecture 1
+  flagged as the core failure mode of under-specified agents. Switching to
+  `permission_mode="bypassPermissions"` (safe here since tool access is
+  already scoped via `AgentDefinition(tools=[...])`) fixed it; a repeat run
+  used `mud.py` directly with no improvisation. **Lesson: giving an SDK-driven
+  agent the right tools isn't enough — the permission mode has to actually let
+  it use them unattended, or it will quietly route around your interface.**
+
+## Architecture conclusions
+
+- **The Claude Agent SDK registers agents directly in code** — an
+  `AgentDefinition` (description, prompt, tools, model) built in Python,
+  rather than a Markdown file Claude Code discovers by scanning
+  `.claude/agents/` at startup.
+- **It provides more control over how agents are executed** — permission
+  mode, tool scope, model, and streaming granularity are all explicit
+  parameters the host program sets and can react to, instead of inherited
+  defaults. The permission-mode gap above is a direct example: it was a
+  problem the SDK let us *see and fix* precisely because execution is
+  programmatic, not opaque.
+- **Parallel agents still work as expected.** Two independently-configured
+  sub-agents ran concurrently from one SDK application, stayed isolated to
+  their own memory files, and returned correctly attributed combined results
+  — confirmed twice, first for a status check-in and again for the hunger
+  check.
+- **Filesystem sub-agents (3A) are simpler, while the Agent SDK is better
+  suited for custom applications.** For a single interactive Claude Code
+  session, dropping a Markdown file into `.claude/agents/` is less code and
+  less to get wrong. Once the agent needs to be *embedded* — driven by a
+  script, a scheduler, or a service, with explicit control over concurrency
+  and permissions — the SDK is the tool built for that job.
+
+## Key takeaway
+
+**The Claude Agent SDK replaces automatic filesystem discovery with
+programmatic agent registration, giving developers greater control over
+orchestration while maintaining the same core PlayMUD functionality.**

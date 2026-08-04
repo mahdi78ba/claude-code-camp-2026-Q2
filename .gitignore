@@ -8,3 +8,9 @@
 # Local backup copies (temporary safety snapshots, not part of the project)
 _backup_*/
 plrfiles_backup_*/
+
+# Python virtualenvs and bytecode caches (e.g. 03b_subagent_sdk/.venv)
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
