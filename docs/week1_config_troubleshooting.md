@@ -698,3 +698,86 @@ Full code review (Client retry/backoff parity with `client.rb`, the
 `urllib.error.HTTPError`-before-`URLError` catch-order requirement, and
 this finding) is in
 [`week1_api_client_python_review.md`](week1_api_client_python_review.md).
+
+---
+
+## `ruby/05_agent_loop`
+
+### 15. Same off-by-one `../` bug as entries #4/#8/#10/#11/#12, now in `05_agent_loop/examples/example.rb`
+
+**Problem:** Fifth occurrence in a row, exactly as entry #12 predicted.
+`05_agent_loop` shipped with only 3 `../`:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../.boukensha", __dir__)
+```
+This silently resolves to `week1_baseline/.boukensha` (doesn't exist), so
+`Config#load_settings` finds no `settings.yaml`, `tasks(:player)` comes back
+`nil`, and `Tasks::Base.provider` raises `ArgumentError: tasks.player.provider
+is required in settings.yaml` — a clear error this time, not a silent one.
+
+**Fix:** same one-line fix, add the missing `../`:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)
+```
+
+**Also needed (same as entries #7/#10/#11/#12, per-project):**
+```bash
+cd week1_baseline/ruby/05_agent_loop
+mkdir -p .bundle && printf -- '---\nBUNDLE_PATH: "vendor/bundle"\n' > .bundle/config
+bundle install
+```
+
+**Why / retain:** fifth confirmation of entry #8's rule — every new
+iteration's `examples/example.rb` ships with the same wrong `../` count and
+needs the same fix. Iterations `06`–`08` should be assumed to have it too;
+fix on sight when wiring up their runners.
+
+---
+
+### 16. Same `PROMPTS_DIR` off-by-one as entry #13, carried into `05_agent_loop/lib/boukensha/config.rb`
+
+**Problem:** `05_agent_loop` copied `config.rb` forward with the same
+uncorrected constant entry #13 found and fixed in `04_api_client`:
+```ruby
+PROMPTS_DIR = File.expand_path("../../../prompts", __dir__).freeze
+```
+Three `../` from `lib/boukensha/config.rb` walks out of `05_agent_loop`
+entirely (into `ruby/prompts`, which doesn't exist) instead of landing on
+`05_agent_loop/prompts/system.md`.
+
+**Why it didn't crash the smoke test:** identical masking to entry #13 —
+`.boukensha/settings.yaml` has `tasks.player.prompt_override.system: true`
+and `.boukensha/prompts/player/system.md` exists, so `Tasks::Base.prompt`
+returns the user-override text before `PROMPTS_DIR` (the broken default) is
+ever consulted.
+
+**Fix:** one line, matching `04_api_client`'s corrected version:
+```ruby
+PROMPTS_DIR = File.expand_path("../../prompts", __dir__).freeze
+```
+Confirmed via `bundle exec ruby -r./lib/boukensha -e '...'`:
+`Boukensha::Config::PROMPTS_DIR` now points at
+`05_agent_loop/prompts/system.md`, and the file exists there.
+
+**Why / retain:** entry #13's warning holds — this bug travels with the
+copy-pasted `config.rb`, not with any one iteration, and a clean example run
+only proves the prompt-override branch, not the default-prompt branch.
+**Check `PROMPTS_DIR` in every new iteration's `config.rb` even when the
+example runs cleanly**, since `.boukensha/settings.yaml` always has the
+override on and will keep masking this for iterations `06`+ too.
+
+Confirmed working via `./week1_baseline/bin/ruby/05_agent_loop` — real, live
+call to `https://api.anthropic.com/v1/messages` using `claude-haiku-4-5`,
+one `tool_use` iteration (`read_file` on `README.md`) followed by
+`end_turn`, matching the README's documented transcript shape.
+
+**Files changed for this iteration:**
+- `week1_baseline/ruby/05_agent_loop/examples/example.rb` — fixed `../`
+  count (entry #15).
+- `week1_baseline/ruby/05_agent_loop/lib/boukensha/config.rb` — fixed
+  `PROMPTS_DIR`'s `../` count (entry #16).
+- `week1_baseline/bin/ruby/05_agent_loop` — new runner, `chmod u+x`.
+- `week1_baseline/ruby/05_agent_loop/.bundle/config` — local bundle path
+  (gitignored).
+- `week1_baseline/ruby/05_agent_loop/vendor/bundle/` — installed gems
+  (gitignored).
