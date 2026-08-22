@@ -295,3 +295,133 @@ Tasks:          player
 - `week1_baseline/ruby/00_config/examples/example.rb` — fixed `../` count.
 - `.gitignore` — added `.bundle/` and `vendor/bundle/` (native gem install
   artifacts, machine-local, not committed).
+
+---
+
+## `01_struct_skeleton` — new runner at `week1_baseline/bin/ruby/01_struct_skeleton`
+
+### 7. `Bundler::PermissionError` when installing `dotenv` for `01_struct_skeleton`
+
+**Problem:** `01_struct_skeleton` has its own `Gemfile`/`Gemfile.lock`
+(separate gem install from `00_config`'s), and hits the exact same wall as
+entry #6: a plain `bundle install` tries to write to the system-wide
+`/var/lib/gems/3.2.0/cache`.
+
+**Fix:** same fix as #6, applied per-project again (bundle config is local
+to each project's `.bundle/`, doesn't carry over from `00_config`):
+```bash
+cd week1_baseline/ruby/01_struct_skeleton
+bundle config set --local path 'vendor/bundle'
+bundle install
+```
+This time `bundle install` alone succeeded — no need for `bundle
+_2.4.20_ install` version-pinning — because `--local path` was set *before*
+the first `bundle install`, so even the auto-installed Bundler 4.0.10 (to
+match `Gemfile.lock`'s `BUNDLED WITH`) landed in `./vendor/bundle` instead of
+the root-owned system path.
+
+**Why / retain:** `.bundle/config` is per-project, not global — every new
+Ruby iteration under `ruby/<NN_name>/` needs this same one-time
+`bundle config set --local path 'vendor/bundle'` before its first `bundle
+install`. Setting it *before* installing (rather than after hitting the
+permission error) avoids the error entirely, including for Bundler's own
+self-install.
+
+---
+
+### 8. Same off-by-one `../` bug as entry #4, now in `01_struct_skeleton/examples/example.rb`
+
+**Problem:** Running the new `week1_baseline/bin/ruby/01_struct_skeleton`
+crashed identically to entry #4:
+```
+NoMethodError: undefined method `[]' for nil:NilClass
+  from lib/boukensha/tasks/base.rb:39:in `fetch'
+  from lib/boukensha/tasks/base.rb:17:in `prompt_override?'
+  ...
+  from examples/example.rb:6:in `<main>'
+```
+Root cause was the same class of bug as #4, in a different file:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../.boukensha", __dir__)
+```
+Only 3 `../` from `.../week1_baseline/ruby/01_struct_skeleton/examples`
+lands on `week1_baseline/.boukensha` (doesn't exist), instead of the real
+`<repo-root>/.boukensha`.
+
+**Fix:** added the missing `../` level, matching `00_config`'s (already
+fixed) version:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)
+```
+Confirmed working via `./bin/ruby/01_struct_skeleton`:
+```
+Config:   #<Boukensha::Config dir=/home/mahdi/claude-code-camp-2026-Q2/.boukensha tasks=player>
+Context:  #<Context task=player turns=2 tools=1>
+Tool:     #<Tool name=move description=Move the player in a direction (north, so params=[:direction]>
+Messages:
+  #<Message role=user content=Explore north and tell me what you find....>
+  #<Message role=assistant content=Sure, let me head north and take a look....>
+```
+
+**Why / retain:** each iteration under `ruby/<NN_name>/` ships its **own
+independent copy** of `examples/example.rb` — fixing this bug once in
+`00_config` (entry #4) did not carry forward, because the file was copied
+(not shared/required) into `01_struct_skeleton` before the fix landed there.
+**When adding a runner for any new iteration, re-check its `example.rb`'s
+`BOUKENSHA_DIR` `../` count against the actual folder depth** — don't assume
+a fix made in an earlier iteration's copy is still present in a later one.
+The correct count is always "however many directories separate
+`examples/` from the repo root," which grows by one exactly when the
+iteration folder itself is one level deep (it always is here, so the count
+is constant at 4 for every `NN_name/examples/example.rb` in this repo) —
+but verify per-file rather than assuming.
+
+### 9. `.gitignore`'s `vendor/bundle/` rule didn't actually ignore any project's `vendor/bundle/`
+
+**Problem:** After entry #7's install, `git status` still showed
+`week1_baseline/ruby/01_struct_skeleton/vendor/` as untracked — and,
+checking further, `week1_baseline/ruby/00_config/vendor/` had silently been
+untracked the same way since entry #6, unnoticed. `git check-ignore -v` on
+either path returned nothing — the existing `.gitignore` rule wasn't
+matching at all:
+```
+vendor/bundle/
+```
+
+**Fix:** changed the rule to anchor at any depth:
+```
+**/vendor/bundle/
+```
+Confirmed both are now ignored:
+```
+$ git check-ignore -v week1_baseline/ruby/01_struct_skeleton/vendor/bundle
+.gitignore:20:**/vendor/bundle/	week1_baseline/ruby/01_struct_skeleton/vendor/bundle
+$ git check-ignore -v week1_baseline/ruby/00_config/vendor/bundle
+.gitignore:20:**/vendor/bundle/	week1_baseline/ruby/00_config/vendor/bundle
+```
+
+**Why / retain:** per `gitignore(5)`, a pattern containing a slash **anywhere
+except the very end** (`vendor/bundle/` has one between `vendor` and
+`bundle`) is anchored to the directory holding the `.gitignore` file — it
+only matches `<repo-root>/vendor/bundle/`, never a nested one like
+`ruby/00_config/vendor/bundle/`. Only a pattern with **no** non-trailing
+slash (like `.bundle/` on the line above it, which matched fine) — or an
+explicit `**/` prefix — matches at every depth. A rule "working" for one
+project's bundle install can still be silently failing for every other
+project's, because each one nests one directory deeper than the repo root
+where the untested assumption was formed. Re-verify gitignore rules with
+`git check-ignore -v <path>` per project, don't assume one clean `git
+status` generalizes.
+
+**Files changed for this iteration:**
+- `week1_baseline/bin/ruby/01_struct_skeleton` — new runner, `chmod u+x`.
+- `week1_baseline/ruby/01_struct_skeleton/examples/example.rb` — fixed
+  `../` count (entry #8).
+- `week1_baseline/ruby/01_struct_skeleton/.bundle/config` — local bundle
+  path (gitignored, entry #7).
+- `week1_baseline/ruby/01_struct_skeleton/vendor/bundle/` — installed gems
+  (gitignored, entries #7 and #9).
+- `.gitignore` — fixed `vendor/bundle/` → `**/vendor/bundle/` so it actually
+  ignores nested project vendor dirs, not just a hypothetical top-level one
+  (entry #9). This also retroactively fixes the same latent miss for
+  `00_config`.

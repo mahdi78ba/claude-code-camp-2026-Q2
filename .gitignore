@@ -17,4 +17,4 @@ __pycache__/
 
 # Ruby local gem installs (e.g. week1_baseline/ruby/00_config)
 .bundle/
-vendor/bundle/
+**/vendor/bundle/
