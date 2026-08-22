@@ -555,3 +555,89 @@ and fix this same bug first, don't rediscover it.**
 Code review (delegation to backends, per-backend model tables, and a real
 interface bug found in `PromptBuilder#to_messages`) is in
 [`week1_prompt_builder_review.md`](week1_prompt_builder_review.md).
+
+---
+
+## `04_api_client` — new runner at `week1_baseline/bin/ruby/04_api_client`
+
+### 12. Same off-by-one `../` bug as entries #4/#8/#10/#11, now in `04_api_client/examples/example.rb`
+
+**Problem:** Fourth occurrence in a row. `04_api_client` shipped with only
+3 `../`:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../.boukensha", __dir__)
+```
+
+**Fix:** same one-line fix, add the missing `../`:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)
+```
+
+**Also needed (same as entries #7/#10/#11, per-project):**
+```bash
+cd week1_baseline/ruby/04_api_client
+bundle config set --local path 'vendor/bundle'
+bundle install
+```
+
+**Why / retain:** fourth confirmation of entry #8's rule. Iterations `05`–`08`
+still have the unfixed 3-`../` version per the repo-wide grep in entry #10 —
+expect and fix on sight when wiring up their runners.
+
+---
+
+### 13. A *second*, different off-by-one — this time in shipped library code, not an example script
+
+**Problem:** `lib/boukensha/config.rb`'s `PROMPTS_DIR` constant:
+```ruby
+PROMPTS_DIR = File.expand_path("../../../prompts", __dir__).freeze
+```
+uses 3 `../` from `lib/boukensha/config.rb`. `03_prompt_builder`'s copy of
+the same file (and the actual on-disk layout — `04_api_client/prompts/`
+sits two levels up from `lib/boukensha/`, not three) uses the correct
+`"../../prompts"`. Three `../` walks one level too far, out of the
+iteration's own directory and into `ruby/prompts` — which doesn't exist.
+
+**Why it didn't crash the smoke test:** `Tasks::Base.system_prompt` checks
+`prompt_override?` first — this repo's `.boukensha/settings.yaml` has
+`tasks.player.prompt_override.system: true`, and
+`.boukensha/prompts/player/system.md` exists, so the user-prompt path
+returns a string before `PROMPTS_DIR` (the broken default) is ever
+consulted. `read_default_prompt` returns `nil` for a missing file rather
+than raising, so a config *without* that override would get a silently
+missing system prompt instead of a clear error — same failure shape as
+entry #4, just reachable through a different code path this time.
+
+**Fix:** one line, matching `03_prompt_builder`'s correct version:
+```ruby
+PROMPTS_DIR = File.expand_path("../../prompts", __dir__).freeze
+```
+
+**Why / retain:** the off-by-one `../`-count bug is a *class* of bug in this
+codebase, not confined to `examples/example.rb` — it can appear in any
+hand-written `File.expand_path("../..."​, __dir__)` line that got
+copy-pasted across iterations. **Grep each new iteration's `lib/` (not just
+its `examples/`) for `File.expand_path("../` before trusting a clean smoke
+test** — a passing run only proves the code paths it happened to exercise,
+not every path constant in the file.
+
+Confirmed working via `./bin/ruby/04_api_client` — real, live POST to
+`https://api.anthropic.com/v1/messages`, response came back
+`stop_reason: "tool_use"` selecting `list_directory`, matching the README's
+documented response shape.
+
+**Files changed for this iteration:**
+- `week1_baseline/ruby/04_api_client/examples/example.rb` — fixed `../`
+  count (entry #12).
+- `week1_baseline/ruby/04_api_client/lib/boukensha/config.rb` — fixed
+  `PROMPTS_DIR`'s `../` count (entry #13).
+- `week1_baseline/bin/ruby/04_api_client` — new runner, `chmod u+x`.
+- `week1_baseline/ruby/04_api_client/.bundle/config` — local bundle path
+  (gitignored).
+- `week1_baseline/ruby/04_api_client/vendor/bundle/` — installed gems
+  (gitignored).
+
+Full code review (retry/error handling in `Client`, the new
+`Backends::Base`/`Tasks::Base` model and prompt machinery, and re-verified
+carry-forward findings from `03_prompt_builder`) is in
+[`week1_api_client_review.md`](week1_api_client_review.md).
