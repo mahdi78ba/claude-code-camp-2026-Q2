@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+REPO_ROOT="$(pwd)"
+APP_DIR="week1_baseline/ruby/00_config"
+
+docker run --rm \
+  -v "$REPO_ROOT:/app" \
+  -v boukensha_ruby_bundle:/usr/local/bundle \
+  -w "/app/$APP_DIR" \
+  ruby:3.3 \
+  bash -c "bundle install --quiet && bundle exec ruby examples/example.rb"

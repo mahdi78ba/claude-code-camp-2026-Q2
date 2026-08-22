@@ -1,0 +1,15 @@
+# Boukensha settings — non-secret configuration (safe to commit).
+# Secrets (e.g. ANTHROPIC_API_KEY) live in .env, which is gitignored.
+
+tasks:
+  player:
+    provider: anthropic        # provider name (string)
+    model: claude-haiku-4-5
+    prompt_override:
+      system: true
+
+mud:
+  host: localhost
+  port: 4000
+  username: dummy
+  password: helloworld
