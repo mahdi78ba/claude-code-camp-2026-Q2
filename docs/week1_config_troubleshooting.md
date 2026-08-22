@@ -641,3 +641,60 @@ Full code review (retry/error handling in `Client`, the new
 `Backends::Base`/`Tasks::Base` model and prompt machinery, and re-verified
 carry-forward findings from `03_prompt_builder`) is in
 [`week1_api_client_review.md`](week1_api_client_review.md).
+
+---
+
+## `python/04_api_client` — Python port
+
+### 14. `Config.mud_host`/`mud_port` returned the wrong value for a configured `0` or `""`
+
+**Problem:** A real `code-review` pass (run against the staged Python port,
+per [[feedback_port_review_rigor]]) flagged that
+`python/04_api_client/boukensha/config.py` used Python's `or` for
+defaulting:
+```python
+@property
+def mud_port(self):
+    return self.dig("mud", "port") or 4000
+```
+Ruby's equivalent, `dig(:mud, :port) || 4000`, only falls back when the
+value is `nil`/`false` — `0` is truthy in Ruby and gets returned as-is. In
+Python, `0` (and `""`) are falsy, so `self.dig(...) or 4000` silently
+discards a legitimately-configured `mud.port: 0` (or `mud.host: ""`) and
+returns the default instead. Not hit by the example script, since
+`.boukensha/settings.yaml`'s `mud.port` is `4000` already (a value that
+happens to equal the default, masking the bug either way).
+
+**Fix:** switched both properties to explicit `is None` checks, matching
+Ruby's actual falsy set:
+```python
+@property
+def mud_port(self):
+    value = self.dig("mud", "port")
+    return 4000 if value is None else value
+```
+Confirmed interactively both ways: `{"mud": {"port": 0, "host": ""}}` now
+returns `0`/`""` unchanged; no `mud` key still returns the correct
+defaults (`4000`/`"localhost"`).
+
+**Why / retain:** Python's `or`-for-defaulting is not a safe stand-in for
+Ruby's `||` whenever the configured value could legitimately be `0`, `""`,
+or an empty collection — Ruby's falsy set is `nil`/`false` only, Python's
+is much bigger. This is a bug *class*, the same way the Ruby
+`../`-count bugs were (entries #4/#8/#10/#11/#12/#13 above) — just
+appearing on the Python side of the port instead. `backends/base.py`'s
+`estimate_cost` already used explicit `is None` checks and got this right;
+`config.py`'s `mud_host`/`mud_port` (carried over unchanged from
+`02_the_registry`/`03_prompt_builder`) didn't, until this review. **Grep
+for bare `... or <default>` reading `settings.yaml`-sourced values in any
+future Python port** rather than assuming a passing smoke test proves
+every defaulting branch is correct — the same "a clean run only proves the
+paths it happened to exercise" lesson from entry #13, now confirmed on the
+Python side too. The bug is not fixed in `02_the_registry`'s or
+`03_prompt_builder`'s copies of `config.py` — only in `04_api_client`'s,
+per "fix on sight in the copy under review," not retroactively.
+
+Full code review (Client retry/backoff parity with `client.rb`, the
+`urllib.error.HTTPError`-before-`URLError` catch-order requirement, and
+this finding) is in
+[`week1_api_client_python_review.md`](week1_api_client_python_review.md).
