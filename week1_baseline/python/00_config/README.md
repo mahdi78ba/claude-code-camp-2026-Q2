@@ -12,9 +12,11 @@ a more advanced loop will assign different LLMs to different tasks.
 ## Design considerations
 
 Prefer the standard library. The only two dependencies are the config parser
-and dotenv (Python has no YAML in the stdlib, unlike Ruby):
+and dotenv (Python has no YAML in the stdlib, unlike Ruby), pinned in
+`requirements.txt` the same way the Ruby reference pins `dotenv` in its
+`Gemfile.lock`:
 
-- `pyyaml` — parse `settings.yaml`
+- `PyYAML` — parse `settings.yaml`
 - `python-dotenv` — load `.env` credentials
 
 The "from scratch" rule is about the **agent loop** (no Agent SDK), not about

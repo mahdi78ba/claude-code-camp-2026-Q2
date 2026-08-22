@@ -1,2 +1,2 @@
-pyyaml
-python-dotenv
+PyYAML==6.0.3
+python-dotenv==1.2.2
