@@ -500,3 +500,58 @@ awareness, not code bugs):**
   (gitignored).
 - `week1_baseline/ruby/02_the_registry/vendor/bundle/` — installed gems
   (gitignored).
+
+---
+
+## `03_prompt_builder` — new runner at `week1_baseline/bin/ruby/03_prompt_builder`
+
+### 11. Same off-by-one `../` bug as entries #4/#8/#10, now in `03_prompt_builder/examples/example.rb`
+
+**Problem:** Identical bug, third occurrence in a row. `03_prompt_builder`
+shipped with only 3 `../`:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../.boukensha", __dir__)
+```
+`bundle exec ruby examples/example.rb` crashed the same way:
+```
+NoMethodError: undefined method `[]' for nil:NilClass
+  from lib/boukensha/tasks/base.rb:39:in `fetch'
+  from lib/boukensha/tasks/base.rb:17:in `prompt_override?'
+  from lib/boukensha/tasks/base.rb:24:in `prompt'
+  from lib/boukensha/tasks/base.rb:32:in `system_prompt'
+  from examples/example.rb:7:in `<main>'
+```
+
+**Fix:** same one-line fix, add the missing `../`:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)
+```
+Confirmed working via `./bin/ruby/03_prompt_builder`, printing a full
+Anthropic-shaped `to_api_payload` JSON body (`model`, `system`, `tools`,
+`messages`).
+
+**Also needed (same as entries #7/#10, per-project):**
+```bash
+cd week1_baseline/ruby/03_prompt_builder
+bundle config set --local path 'vendor/bundle'
+bundle install
+```
+
+**Why / retain:** third confirmation of entry #8's rule — every
+`ruby/<NN_name>/examples/example.rb` is an independent copy with its own
+un-fixed 3-`../` bug until touched. Entry #10 already predicted this exact
+failure for iterations 03–08. **Before wiring up a runner for 04–08, expect
+and fix this same bug first, don't rediscover it.**
+
+**Files changed for this iteration:**
+- `week1_baseline/ruby/03_prompt_builder/examples/example.rb` — fixed `../`
+  count (entry #11).
+- `week1_baseline/bin/ruby/03_prompt_builder` — new runner, `chmod u+x`.
+- `week1_baseline/ruby/03_prompt_builder/.bundle/config` — local bundle path
+  (gitignored).
+- `week1_baseline/ruby/03_prompt_builder/vendor/bundle/` — installed gems
+  (gitignored).
+
+Code review (delegation to backends, per-backend model tables, and a real
+interface bug found in `PromptBuilder#to_messages`) is in
+[`week1_prompt_builder_review.md`](week1_prompt_builder_review.md).
