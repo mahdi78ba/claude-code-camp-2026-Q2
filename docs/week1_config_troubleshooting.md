@@ -781,3 +781,116 @@ one `tool_use` iteration (`read_file` on `README.md`) followed by
   (gitignored).
 - `week1_baseline/ruby/05_agent_loop/vendor/bundle/` — installed gems
   (gitignored).
+
+---
+
+## `python/05_agent_loop` — Python port
+
+### 17. `Agent._call_opts` treated `max_output_tokens=0` as falsy — Python truthy-check bug, same class as entry #14
+
+**Problem:** Ported from Ruby's `@max_output_tokens ? { max_output_tokens: @max_output_tokens } : {}`
+as a literal truthy check:
+```python
+def _call_opts(self):
+    return {"max_output_tokens": self._max_output_tokens} if self._max_output_tokens else {}
+```
+Ruby's `?:` truthy check only excludes `nil`/`false` — `0` is truthy in
+Ruby and would be included. Python's truthy check excludes `0` too, so a
+task configured with `max_output_tokens: 0` would silently fall back to
+`Client`'s own default (`1024`) instead of actually sending `0`. Same bug
+*class* as entry #14 (`mud_port`), caught this time during review, not by
+the smoke test — the real `.boukensha/settings.yaml` uses `1024`, which is
+truthy either way, so a passing live run would never have surfaced this.
+
+**Fix:** explicit `is None` check, matching Ruby's actual falsy set:
+```python
+def _call_opts(self):
+    if self._max_output_tokens is None:
+        return {}
+    return {"max_output_tokens": self._max_output_tokens}
+```
+Confirmed via an offline fake-client test harness (no live API needed) that
+exercises the multi-tool-call loop, the `max_iterations` wind-down path
+(`tools=[]` passed correctly), the `ApiError` → fallback-message path, and
+`max_iterations=0` disabling the ceiling — none of which the live smoke
+test alone would have exercised.
+
+**Why / retain:** [[feedback_port_review_rigor]] in practice — a clean
+live run only proves the one path it happened to exercise
+(`max_output_tokens: 1024`, one tool call, one provider). **Write a small
+offline test harness (fake client/builder) for any new stateful class like
+`Agent`, covering the branches a single live smoke test can't reach**
+(zero/falsy config values, the wind-down path, the error path) — this is
+now the second time (`mud_port` in entry #14, `max_output_tokens` here) a
+Python `or`/truthy-check stand-in for Ruby's narrower nil/false falsy set
+has hidden a real bug from a passing smoke test.
+
+### 18. `openai.py`/`gemini.py` `parse_response` normalized away a real asymmetry already present in the Ruby backends
+
+**Problem:** `ollama.rb`/`ollama_cloud.rb` guard the text block with
+`if message["content"] && !message["content"].empty?`, but `openai.rb`
+only has `if message["content"]` (no `!empty?` guard) — since `""` is
+truthy in Ruby, OpenAI's Ruby backend **does** emit a `{"type": "text",
+"text": ""}` block for empty-string content, while Ollama's doesn't. Same
+gap in `gemini.rb`: `elsif part["text"]` has no `!empty?` guard either. The
+first draft of the Python port used a single truthy check
+(`if message.get("content"):` / `elif part.get("text"):`) everywhere,
+which silently erased this asymmetry — Python's `""` is falsy, so both
+backends would have behaved like Ollama, not like their actual Ruby
+counterparts.
+
+**Fix:** `openai.py`/`gemini.py`'s `parse_response` use
+`is not None` instead of a bare truthy check, so an empty string is
+included (matching Ruby's `if message["content"]`/`elsif part["text"]`)
+while `None`/missing is excluded — `ollama.py`/`ollama_cloud.py` correctly
+keep their truthy check (Python's `if x:` on a string already matches
+Ruby's `x && !x.empty?` exactly, no change needed there). Confirmed with an
+offline test asserting `openai.parse_response` includes a `text: ""` block
+that `ollama.parse_response` correctly omits for the identical input shape.
+
+**Why / retain:** an inconsistency between two Ruby backends is not
+automatically a bug to fix during a port — **the job is to port what Ruby
+actually does, asymmetry included**, unless explicitly asked to fix it.
+Reaching for one "obviously correct" Python idiom (a bare truthy check) for
+all five backends at once erases a real, source-verified difference between
+them. Diff each backend's actual guard condition individually rather than
+assuming they're all the same shape.
+
+**Files changed for this iteration:**
+- `week1_baseline/python/05_agent_loop/boukensha/agent.py` — new file;
+  fixed `_call_opts` truthy check (entry #17).
+- `week1_baseline/python/05_agent_loop/boukensha/errors.py` — added
+  `LoopError`.
+- `week1_baseline/python/05_agent_loop/boukensha/__init__.py` — exports
+  `Agent`, `LoopError`.
+- `week1_baseline/python/05_agent_loop/boukensha/prompt_builder.py` —
+  `to_api_payload` gained `tools=`; added `parse_response`.
+- `week1_baseline/python/05_agent_loop/boukensha/client.py` — `call` gained
+  `tools=`.
+- `week1_baseline/python/05_agent_loop/boukensha/tasks/base.py` — added
+  `max_iterations`/`max_output_tokens`/`_integer_setting`.
+- `week1_baseline/python/05_agent_loop/boukensha/backends/*.py` — `tools=`
+  on `to_payload`; `parse_response` on all five; `_assistant_message`/
+  `_assistant_parts` on four of five; fixed the truthy-check asymmetry bug
+  in `openai.py`/`gemini.py` (entry #18).
+- `week1_baseline/python/05_agent_loop/examples/example.py` — rewritten to
+  build and run an `Agent`.
+- `week1_baseline/python/05_agent_loop/README.md` — rewritten for this
+  step (the copy step had left `04_api_client`'s README in place).
+- `week1_baseline/bin/python/05_agent_loop` — new runner.
+- `week1_baseline/python/05_agent_loop/.venv/` — lesson-local virtualenv
+  (gitignored).
+
+Confirmed working via `./week1_baseline/bin/python/05_agent_loop` — real,
+live call to `https://api.anthropic.com/v1/messages` using
+`claude-haiku-4-5`, one `tool_use` iteration (`read_file` on `README.md`)
+followed by `end_turn`, matching both the Ruby transcript shape and
+`ruby/05_agent_loop`'s own verified run. Additionally verified offline
+(no live API) with a fake-client test harness covering the multi-tool-call
+loop, the `max_iterations` wind-down path, the `ApiError` fallback path,
+and `max_iterations=0`, plus a second harness exercising each backend's
+`parse_response`/`_assistant_message`/`_assistant_parts` round-trip
+directly against representative raw provider payloads.
+
+Full port plan is in
+[`week1_agent_loop_port_plan.md`](week1_agent_loop_port_plan.md).
