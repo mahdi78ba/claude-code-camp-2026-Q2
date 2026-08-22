@@ -425,3 +425,78 @@ status` generalizes.
   ignores nested project vendor dirs, not just a hypothetical top-level one
   (entry #9). This also retroactively fixes the same latent miss for
   `00_config`.
+
+---
+
+## `02_the_registry` — new runner at `week1_baseline/bin/ruby/02_the_registry`
+
+### 10. Same off-by-one `../` bug as entries #4/#8, now in `02_the_registry/examples/example.rb`
+
+**Problem:** `02_the_registry` ships with only 3 `../` in its
+`BOUKENSHA_DIR` line, the same mistake as `00_config` (entry #4) and
+`01_struct_skeleton` (entry #8):
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../.boukensha", __dir__)
+```
+`bundle exec ruby examples/example.rb` crashed identically:
+```
+NoMethodError: undefined method `[]' for nil:NilClass
+  from lib/boukensha/tasks/base.rb:39:in `fetch'
+  from lib/boukensha/tasks/base.rb:17:in `prompt_override?'
+  ...
+  from examples/example.rb:6:in `<main>'
+```
+A repo-wide grep shows every iteration from `02_the_registry` through
+`08_the_repl_loop` still has the 3-`../` version — this bug is latent in
+all of them, only `00_config` and `01_struct_skeleton` have been fixed so
+far because those are the only ones exercised to date.
+
+**Fix:** same one-line fix as before, add the missing `../`:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)
+```
+Confirmed working via `./bin/ruby/02_the_registry`:
+```
+Config:  #<Boukensha::Config dir=/home/mahdi/claude-code-camp-2026-Q2/.boukensha tasks=player>
+Context: #<Context task=player turns=0 tools=2>
+Tools:
+  #<Tool name=move ...>
+  #<Tool name=shout ...>
+Dispatching 'shout' with message='dragon spotted'...
+Result: DRAGON SPOTTED
+Dispatching 'move' with direction='north'...
+Result: You move north into a torch-lit corridor.
+UnknownToolError caught: No tool registered as 'flee'
+```
+
+**Why / retain:** confirms entry #8's rule — the fix does not propagate
+across iterations because each `examples/example.rb` is an independent
+copy, not shared code. **Before wiring up a runner for iterations 03–08,
+expect and fix this same bug first** rather than rediscovering it each
+time.
+
+**Also needed (same as entry #7, applied fresh — bundle config is
+per-project):**
+```bash
+cd week1_baseline/ruby/02_the_registry
+bundle config set --local path 'vendor/bundle'
+bundle install
+```
+
+**README discrepancies noticed while reviewing (not fixed — flagging for
+awareness, not code bugs):**
+- `## Expected Output` shows `Context: #<Context turns=0 tools=2
+  budget=8192>`, but `Boukensha::Context#to_s` (unchanged since
+  `01_struct_skeleton`) actually prints `task=player turns=0 tools=2` — no
+  `budget` field exists yet. Real output is otherwise identical.
+- `## Run Example` says `./week1_baseline/bin/01_the_registry` — wrong
+  iteration number; the real path is `./week1_baseline/bin/ruby/02_the_registry`.
+
+**Files changed for this iteration:**
+- `week1_baseline/ruby/02_the_registry/examples/example.rb` — fixed `../`
+  count (entry #10).
+- `week1_baseline/bin/ruby/02_the_registry` — new runner, `chmod u+x`.
+- `week1_baseline/ruby/02_the_registry/.bundle/config` — local bundle path
+  (gitignored).
+- `week1_baseline/ruby/02_the_registry/vendor/bundle/` — installed gems
+  (gitignored).
