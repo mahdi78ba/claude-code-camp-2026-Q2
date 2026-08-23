@@ -1112,3 +1112,77 @@ setup).
   (gitignored).
 - `week1_baseline/ruby/log_viz/vendor/bundle/` — installed gems
   (gitignored).
+
+---
+
+## `ruby/07_the_run_dsl` — new runner at `week1_baseline/bin/ruby/07_the_run_dsl`
+
+### 23. Same three known bugs as entries #4–#22, all three inherited unfixed into `07_the_run_dsl`
+
+**Problem:** `07_the_run_dsl` copied all three previously-identified
+template bugs forward, unfixed:
+```ruby
+# examples/example.rb
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../.boukensha", __dir__)
+
+# lib/boukensha/config.rb
+PROMPTS_DIR = File.expand_path("../../../prompts", __dir__).freeze
+
+# lib/boukensha/logger.rb
+def provider_name(backend)
+  return nil unless backend
+
+  backend.class.name.split("::").last.gsub(/([a-z\d])([A-Z])/, '\1_\2').downcase
+end
+```
+
+**Fix:** same three one-line fixes as `06_the_logger` (entries #19, #20):
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)
+PROMPTS_DIR = File.expand_path("../../prompts", __dir__).freeze
+```
+```ruby
+def provider_name(backend)
+  return nil unless backend
+  return "openai" if backend.is_a?(Backends::OpenAI)
+
+  backend.class.name.split("::").last.gsub(/([a-z\d])([A-Z])/, '\1_\2').downcase
+end
+```
+
+**Also needed (per-project, same as every prior iteration):** copied
+`06_the_logger`'s already-installed `.bundle/config` and `vendor/bundle/`
+wholesale (identical `Gemfile`/`Gemfile.lock` between the two steps), then
+confirmed with `bundle check` instead of re-running `bundle install` —
+saved a redundant install since nothing in the dependency set changed
+between these two consecutive iterations.
+
+**Why / retain:** seventh confirmation of entry #8's `BOUKENSHA_DIR` rule,
+fourth of entry #13's `PROMPTS_DIR` rule, second of entry #20's
+`provider_name` rule — all three bugs travel with the copy-pasted
+template, unmodified, into every new iteration until each one is
+individually reviewed and fixed. **Never assume a new iteration is
+bug-free just because an earlier sibling already got the fix** — diff the
+specific known-bad lines against the new copy on sight, same as before.
+
+Confirmed working via `./week1_baseline/bin/ruby/07_the_run_dsl` — real,
+live call to `https://api.anthropic.com/v1/messages` using
+`claude-haiku-4-5` through the new `Boukensha.run` DSL entry point (no
+manual `Context`/`Registry`/`Client`/`Logger` wiring in the example
+script); the resulting `.boukensha/sessions/<id>.jsonl` was inspected
+line-by-line and shows a correct `provider: "anthropic"` tag plus a
+`read_file` `tool_call`/`tool_result` pair, matching the README's
+documented flow.
+
+**Files changed for this iteration:**
+- `week1_baseline/ruby/07_the_run_dsl/examples/example.rb` — fixed
+  `BOUKENSHA_DIR` `../` count.
+- `week1_baseline/ruby/07_the_run_dsl/lib/boukensha/config.rb` — fixed
+  `PROMPTS_DIR`'s `../` count.
+- `week1_baseline/ruby/07_the_run_dsl/lib/boukensha/logger.rb` — fixed
+  `provider_name`'s OpenAI mislabeling.
+- `week1_baseline/bin/ruby/07_the_run_dsl` — new runner, `chmod u+x`.
+- `week1_baseline/ruby/07_the_run_dsl/.bundle/config` — local bundle path
+  (gitignored).
+- `week1_baseline/ruby/07_the_run_dsl/vendor/bundle/` — installed gems,
+  copied from `06_the_logger`'s identical lockfile (gitignored).
