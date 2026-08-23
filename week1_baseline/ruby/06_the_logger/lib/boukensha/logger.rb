@@ -111,6 +111,10 @@ module Boukensha
 
     def provider_name(backend)
       return nil unless backend
+      # OpenAI's trailing acronym doesn't snake_case cleanly (the generic gsub
+      # below would yield "open_ai"), so special-case it to match the
+      # "openai" provider string used in settings.yaml / config.rb.
+      return "openai" if backend.is_a?(Backends::OpenAI)
 
       backend.class.name.split("::").last.gsub(/([a-z\d])([A-Z])/, '\1_\2').downcase
     end

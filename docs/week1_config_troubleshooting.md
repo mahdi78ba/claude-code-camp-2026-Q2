@@ -894,3 +894,221 @@ directly against representative raw provider payloads.
 
 Full port plan is in
 [`week1_agent_loop_port_plan.md`](week1_agent_loop_port_plan.md).
+
+---
+
+## `ruby/06_the_logger` — new runner at `week1_baseline/bin/ruby/06_the_logger`
+
+### 19. Same off-by-one `../` bugs as entries #4/#8/#10/#11/#12/#15 and #13/#16, sixth occurrence of each
+
+**Problem:** `06_the_logger` shipped with both known off-by-one mistakes,
+copy-pasted forward unfixed from the original template:
+```ruby
+# examples/example.rb
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../.boukensha", __dir__)
+
+# lib/boukensha/config.rb
+PROMPTS_DIR = File.expand_path("../../../prompts", __dir__).freeze
+```
+
+**Fix:** same two one-line fixes as every prior iteration:
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)
+PROMPTS_DIR = File.expand_path("../../prompts", __dir__).freeze
+```
+
+**Also needed (per-project, same as every prior iteration):**
+```bash
+cd week1_baseline/ruby/06_the_logger
+mkdir -p .bundle && printf -- '---\nBUNDLE_PATH: "vendor/bundle"\n' > .bundle/config
+bundle install
+```
+
+**Why / retain:** sixth confirmation of entry #8's rule for `BOUKENSHA_DIR`
+and third for `PROMPTS_DIR` (after #13, #16) — both bugs travel with the
+copy-pasted template, not with any one iteration. Iterations `07`/`08`
+should be assumed to have both; fix on sight when wiring up their runners.
+
+### 20. `Logger#provider_name` mislabels the OpenAI backend as `"open_ai"` — real bug in the new logging code
+
+**Problem:** `Logger#provider_name` derives the `provider` field written into
+every `response` JSONL line from the backend's class name via a generic
+CamelCase→snake_case gsub:
+```ruby
+backend.class.name.split("::").last.gsub(/([a-z\d])([A-Z])/, '\1_\2').downcase
+```
+This is correct for `Anthropic`, `Gemini`, `Ollama`, and `OllamaCloud`
+(→ `anthropic`/`gemini`/`ollama`/`ollama_cloud`), but `Backends::OpenAI`'s
+trailing acronym doesn't snake_case cleanly: the regex inserts an
+underscore at every lowercase→uppercase boundary, including inside `AI`,
+producing `"open_ai"`. Everywhere else in the codebase — `settings.yaml`,
+`config.rb`'s provider `case` statement — the string is `"openai"` (no
+underscore). Not caught by the smoke test, which only exercises the
+Anthropic backend; found by explicitly instantiating all five backend
+classes offline and comparing `provider_name` output against the string
+each one is actually selected by in `config.rb`.
+
+**Fix:** special-cased `Backends::OpenAI` ahead of the generic gsub:
+```ruby
+def provider_name(backend)
+  return nil unless backend
+  return "openai" if backend.is_a?(Backends::OpenAI)
+
+  backend.class.name.split("::").last.gsub(/([a-z\d])([A-Z])/, '\1_\2').downcase
+end
+```
+Confirmed offline (no live API) by instantiating one backend of each of the
+five classes and asserting `provider_name` matches the provider string used
+to select that class in `config.rb`.
+
+**Why / retain:** a generic identifier-casing transform (CamelCase→
+snake_case, plural→singular, etc.) is not safe to trust for every class
+name in a codebase — acronym-bearing names (`OpenAI`, similarly `HTTPS`,
+`ID`) are a known blind spot for that whole class of regex. This is data
+correctness in the logging feature itself (this iteration's actual
+deliverable), not an infra/path issue like entries #4–#18: anyone
+filtering `.boukensha/sessions/*.jsonl` by `provider: "openai"` would
+silently miss every OpenAI-backed session's `response` lines.
+
+**Also noticed, not changed:** `Logger#close` is defined but never called
+by `Agent` or `examples/example.rb` — harmless for this short-lived script
+(the OS reclaims the file descriptor at process exit), but worth revisiting
+once a longer-lived process (the REPL loop / TUI iterations) can create
+many `Logger` instances in one run.
+
+**`.gitignore` gap found and fixed:** this is the first iteration that
+actually writes to `.boukensha/sessions/` (previous iterations' loggers
+were never wired up to run). Nothing ignored it, so a live run left an
+untracked `.boukensha/sessions/*.jsonl` file in `git status`. Added
+`.boukensha/sessions/` to `.gitignore` — generated per-run output, not
+project content, same reasoning as `**/vendor/bundle/` (entry #9).
+
+**README discrepancy noticed, not fixed:** the README's Logger API table
+documents `prompt(messages:, tools:, budget:)`, but the shipped
+`Logger#prompt` (and its only call site, in `agent.rb`) takes just
+`messages:` and `tools:` — no `budget:` parameter exists anywhere in this
+step's code. Code and call site agree with each other, so this is a stale
+doc claim, not a runtime bug — flagging for awareness only, per the same
+policy as the `02_the_registry` README discrepancies above.
+
+Confirmed working via `./week1_baseline/bin/ruby/06_the_logger` — real,
+live call to `https://api.anthropic.com/v1/messages` using
+`claude-haiku-4-5`; the resulting `.boukensha/sessions/<id>.jsonl` was
+inspected line-by-line and matches the README's documented shape
+(`session_start`, `iteration`, `prompt`, `tool_call`, `tool_result`,
+`response` with `cost_usd`, `turn_end`).
+
+**Files changed for this iteration:**
+- `week1_baseline/ruby/06_the_logger/examples/example.rb` — fixed
+  `BOUKENSHA_DIR` `../` count (entry #19).
+- `week1_baseline/ruby/06_the_logger/lib/boukensha/config.rb` — fixed
+  `PROMPTS_DIR`'s `../` count (entry #19).
+- `week1_baseline/ruby/06_the_logger/lib/boukensha/logger.rb` — fixed
+  `provider_name`'s OpenAI mislabeling (entry #20).
+- `week1_baseline/bin/ruby/06_the_logger` — new runner, `chmod u+x`.
+- `week1_baseline/ruby/06_the_logger/.bundle/config` — local bundle path
+  (gitignored).
+- `week1_baseline/ruby/06_the_logger/vendor/bundle/` — installed gems
+  (gitignored).
+- `.gitignore` — added `.boukensha/sessions/`.
+
+---
+
+## `ruby/log_viz` — viewing the 06_the_logger sessions
+
+### 21. `bundle install` fails: `nio4r` native extension can't compile (no C compiler, no usable `sudo`/Docker)
+
+**Problem:** `log_viz`'s `Gemfile` depends on `puma`, which depends on
+`nio4r` — a native (C extension) gem. `bundle install` failed at the
+`extconf.rb`/`mkmf` step:
+```
+checking for unistd.h... *** extconf.rb failed ***
+...
+The compiler failed to generate an executable file.
+You have to install development tools first.
+```
+This session has neither `gcc` nor working `sudo` (`sudo -n true` →
+`sudo: a password is required`, same TTY-less constraint as entry #3), and
+the Docker workaround used for that entry isn't available here either —
+`docker` resolves to the Windows-side binary but WSL integration isn't
+active for this distro (`could not be found in this WSL 2 distro`).
+
+**Fix:** swapped `puma` for `webrick` in the `Gemfile` — pure Ruby, no
+native extension, and already present as a Ruby-bundled default gem:
+```diff
+ gem "sinatra"
+ gem "rackup"
+-gem "puma"
++gem "webrick"
+```
+Removed the stale `vendor/bundle/` from the failed puma install and reran
+`bundle install`; it installed cleanly with `webrick` in place of
+`puma`/`nio4r`. Sinatra's `App.run!` auto-picks whichever Rack handler is
+available, so no code change was needed beyond the `Gemfile` — starting
+`bin/log_viz` shows `Sinatra ... has taken the stage on 4567 ... with
+backup from WEBrick`.
+
+**Why / retain:** same lesson as entry #3, one level more specific — a
+missing compiler doesn't just block gems that need `sudo` to install
+system-wide, it blocks *any* native-extension gem regardless of install
+location (`vendor/bundle` included), and the right fix is usually a
+pure-Ruby alternative dependency, not fighting for compiler access. Prefer
+`webrick` over `puma` for any future small Sinatra/Rack tool in this repo
+under the same host constraints — it's slower under real concurrent load
+but that doesn't matter for a local, single-viewer log browser.
+
+### 22. Same off-by-one `../` bug as entries #4/#8/#10/#11/#12/#15/#19, now in `log_viz`'s default `sessions_dir`
+
+**Problem:** `lib/log_viz/app.rb` computes its default log directory the
+same way every `example.rb`/`config.rb` in this repo has:
+```ruby
+set :sessions_dir, ENV.fetch("LOG_VIZ_SESSIONS_DIR") {
+  File.expand_path("../../../../.boukensha/sessions", __dir__)
+}
+```
+4 `../` from `.../ruby/log_viz/lib/log_viz` lands on
+`week1_baseline/.boukensha/sessions` (doesn't exist — one directory
+shallower than `log_viz` itself, since `log_viz` sits at
+`ruby/log_viz/`, the same depth as each `ruby/<NN_name>/`). Visiting `/`
+after starting the server confirmed it silently: "No session logs found in
+`.../week1_baseline/.boukensha/sessions`" — no crash, just an empty list,
+the same *silent* failure shape as entry #4's original discovery (missing
+file → nil/empty, not an exception).
+
+**Fix:** added the missing `../` level, matching every other fixed
+instance of this bug in the repo:
+```ruby
+File.expand_path("../../../../../.boukensha/sessions", __dir__)
+```
+Restarted the server; `/` now lists the real sessions from
+`<repo-root>/.boukensha/sessions`, and `/sessions/:id` renders a full
+transcript (user/assistant messages, provider/model, token counts,
+`cost ≈ $0.0041`) for the `06_the_logger` session generated earlier.
+
+**Why / retain:** seventh confirmation of entry #8's rule, and the first
+time this exact bug class has shown up outside `examples/example.rb` or
+`config.rb` — **any `File.expand_path("../...", __dir__)` default-path
+constant anywhere in this repo is a candidate for this bug**, not just the
+two files it's been found in six times before. Grep for the pattern in any
+new tool before trusting its "no results" output at face value.
+
+Confirmed working: started `bundle exec ruby bin/log_viz` (WEBrick on
+`:4567`, bound to `localhost`), `curl`'d both `/` (session list, showing
+start time/session id/task/model/iterations/tokens/cost) and
+`/sessions/<id>` (full transcript with the real messages and computed
+cost) — both returned HTTP 200 with the expected content. Left the server
+running in the background for interactive viewing at
+<http://localhost:4567> (WSL2 forwards `localhost` to the Windows host
+automatically, so this is reachable from a Windows browser without extra
+setup).
+
+**Files changed:**
+- `week1_baseline/ruby/log_viz/Gemfile` — `puma` → `webrick` (entry #21).
+- `week1_baseline/ruby/log_viz/Gemfile.lock` — regenerated for the new
+  dependency set.
+- `week1_baseline/ruby/log_viz/lib/log_viz/app.rb` — fixed
+  `sessions_dir`'s default `../` count (entry #22).
+- `week1_baseline/ruby/log_viz/.bundle/config` — local bundle path
+  (gitignored).
+- `week1_baseline/ruby/log_viz/vendor/bundle/` — installed gems
+  (gitignored).
