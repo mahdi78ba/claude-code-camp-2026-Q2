@@ -1580,3 +1580,173 @@ corrected step numbers in the "doesn't support the REPL" message.
 - `docs/week1_global_executable_overview.md` — new overview/review doc.
 - `docs/week1_global_executable_review.md` — new companion doc, scoped to
   `lib/boukensha_loader.rb`.
+
+---
+
+### 28. `bin/boukensha` tracked non-executable (build warning), plus system gem dir not writable (install choice)
+
+**Problem:** actually running `gem build boukensha.gemspec` (not just
+reading the gemspec) surfaced a warning reading the code never would:
+```
+WARNING:  bin/boukensha is not executable
+```
+`bin/boukensha` was tracked in git as mode `100644`. Checked whether this
+was isolated to `09_global_executable`:
+```ruby
+$ git ls-files -s -- '*/bin/boukensha'
+100644 ... 09_global_executable/bin/boukensha
+100644 ... 10_standard_tool_library/bin/boukensha
+100644 ... 11_tui/bin/boukensha
+100644 ... 12_context/bin/boukensha
+```
+All four gem-packaging steps ship it the same way — a template oversight,
+not a one-off. Separately, actually attempting the install (not just
+running `gem build`) surfaced a second, unrelated fact the gemspec has no
+way to express: the system gem directory isn't writable by this account —
+```
+$ gem environment gemdir
+/var/lib/gems/3.2.0
+$ [ -w /var/lib/gems/3.2.0 ] && echo writable || echo "not writable"
+not writable
+```
+— so a plain `gem install boukensha-0.9.0.gem` would fail outright, not
+partially succeed.
+
+**Fix:** `chmod +x` on `09_global_executable/bin/boukensha` only (10/11/12
+are future iterations, out of scope here) — second `gem build` came back
+clean except for the pre-existing, harmless "no homepage specified"
+warning. For install, checked `gem list boukensha` first (empty — nothing
+to uninstall, verified rather than assumed) and then installed with
+`gem install --user-install ./boukensha-0.9.0.gem --no-document` instead
+of `sudo gem install`, trading immediate system-wide `$PATH` availability
+for zero elevated-privilege footprint.
+
+**Why / retain:** neither of these two facts is visible from reading the
+gemspec or `lib/` — one only shows up as a build *warning* (easy to miss
+if you only check the build's exit code / "Successfully built" line), the
+other only shows up by actually probing the target filesystem before
+installing. Per [[feedback_port_review_rigor]], "the gem builds and the
+smoke test passes" is not the same claim as "the gem builds *cleanly* and
+installs the way the README says it will" — the executable-bit warning
+would not have blocked anyone (RubyGems marks the *installed* copy
+executable via `spec.executables` regardless of the source file's own
+permission bit, confirmed by `ls -la` on the installed copy showing
+`-rwxr-xr-x`), but it would have kept reappearing on every future build
+until someone traced it. The `--user-install` choice also produces its
+own real, disclosed gap: `~/.local/share/gem/ruby/3.2.0/bin` is not on
+this machine's `$PATH`, so the bare `boukensha` command does not work yet
+in a fresh shell — confirmed the install itself is nonetheless correct by
+invoking the installed executable through its full path (live Anthropic
+call, run from `/tmp`, no bundler/Gemfile in scope). Adding that directory
+to `$PATH` is left for the machine's owner, since it's a persistent shell
+change outside this repo's scope.
+
+**Files changed for this iteration:**
+- `week1_baseline/ruby/09_global_executable/bin/boukensha` — `chmod +x`
+  (mode `100644` → `100755`).
+- `docs/week1_global_executable_overview.md` — added §4, "Build &
+  install, done for real."
+
+---
+
+### 29. Two independent, machine-local config files were simply missing — not a code bug, but the installed gem couldn't run from a fresh shell without them
+
+**Problem:** the installed gem is a frozen snapshot — it has no
+awareness of this repo's live source files, and this machine had never
+been configured to point it at them. Concretely, two separate resolution
+chains each fell through to their last tier and found nothing there:
+```
+$ cat ~/.boukensharc
+cat: /home/mahdi/.boukensharc: No such file or directory   # BOUKENSHA_PATH's tier-2 file (code)
+
+$ ls ~/.boukensha
+ls: cannot access '/home/mahdi/.boukensha': No such file or directory   # Config's tier-3 dir (settings.yaml/.env)
+```
+Confirmed live: running the freshly-installed `boukensha` from `/tmp`
+with zero env vars set correctly fell all the way through to the
+installed gem's own bundled `lib/` for *code* (tier 3 of
+`BoukenshaLoader.resolve`), but then crashed loud on
+`tasks.player.model is required in settings.yaml` — the *config*
+resolution chain (a completely separate one, inside `Boukensha::Config`)
+had nowhere left to fall back to either.
+
+**Fix:**
+```bash
+echo "/home/.../week1_baseline/ruby/09_global_executable" > ~/.boukensharc
+ln -s /home/.../.boukensha ~/.boukensha
+```
+The rc file makes the global executable load *this repo's* live source
+instead of the frozen installed copy; the symlink (chosen over a copy) so
+`settings.yaml`/`.env` have one source of truth rather than two files
+that can drift, including the API key in `.env` — a copy would have put a
+second copy of that secret on disk.
+
+**Why / retain:** neither gap was a defect in the gem or the loader code
+— `resolve`'s three-tier chain and `Config#resolve_dir`'s three-tier
+chain were both already correct and already tested (entries #16/#25/#27).
+This is the class of thing that only shows up when you actually run the
+*installed* executable from an unrelated directory with *no* environment
+set up ahead of time, per [[feedback_port_review_rigor]] — a run from
+inside the project folder, or with `BOUKENSHA_DIR` pre-exported by a
+runner script, would never exercise either fallback path. Verified the
+full priority chain afterward with `BOUKENSHA_DEBUG=1` across four
+conditions (`.boukensharc` present / removed / restored / overridden by
+`BOUKENSHA_PATH`), using the banner's version string (`v0.8.0` vs
+`v0.9.0`) as an unambiguous tell for which tier actually won on a given
+run — then the actual acceptance test: `boukensha` from `/tmp`, zero env
+vars, resolved both code and config automatically and completed a real
+live turn.
+
+**Files changed for this iteration:**
+- `~/.boukensharc` — new (outside the repo; points at
+  `week1_baseline/ruby/09_global_executable`).
+- `~/.boukensha` — new symlink (outside the repo) to this repo's
+  `.boukensha/`.
+- `docs/week1_global_executable_overview.md` — added §5, "Configuring
+  which project the global executable loads."
+
+---
+
+### 30. Final acceptance check — launch, REPL, one real prompt (no new bugs, one known gap re-confirmed)
+
+**Problem:** none — this was the closing verification, not a bug hunt.
+Everything fixed/configured in entries #27–#29 needed one end-to-end run,
+done the way an actual user would do it (piped stdin, a plain-English
+question, no flags, no `bundle exec`), to confirm it all composes rather
+than just each piece working in isolation.
+
+**Fix:** N/A — nothing changed. Ran, from `/tmp`:
+```
+$ printf 'Tell me a one-sentence fun fact about MUDs.\n/exit\n' | boukensha
+╔══════════════════════════════════════╗
+║  BOUKENSHA MUD Assistant (v0.9.0)    ║
+╚══════════════════════════════════════╝
+  config:    /home/mahdi/.boukensha
+  provider:  anthropic (claude-haiku-4-5)  ✓ API key set
+  ...
+boukensha> MUDs were the original online multiplayer games ...
+boukensha> Goodbye.
+```
+All three of this iteration's real failure modes were confirmed absent:
+no `LoadError` on `dotenv` (entry #27's gemspec fix), no missing/empty
+system prompt (entry #27's `PROMPTS_DIR` fix — the reply is clearly
+persona-informed), no config-resolution crash (entry #29's `~/.boukensha`
+symlink). The reply is a genuine live round trip to
+`https://api.anthropic.com/v1/messages`, not a canned response, and
+`/exit` exits cleanly.
+
+**Why / retain:** re-confirms the one still-open, already-disclosed gap
+from entry #28 rather than surfacing a new one: `which boukensha` in a
+truly fresh shell still comes back empty, because
+`~/.local/share/gem/ruby/3.2.0/bin` isn't on `$PATH`. Every command in
+this document has worked around that by invoking the executable's full
+path; that's a `$PATH` decision for the machine's owner to make (adding
+one `export` line to a shell rc file), not something to change on this
+session's own judgment, per the earlier decision to favor
+`--user-install` over `sudo` in entry #28. Worth restating precisely
+*here*, at the final acceptance step, so it isn't mistaken for something
+this step broke — it's the same known gap, still open, by design.
+
+**Files changed for this iteration:** none in the repo.
+`docs/week1_global_executable_overview.md` — added §6, "Final acceptance
+check — launch, REPL, one real prompt."
