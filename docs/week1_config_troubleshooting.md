@@ -1186,3 +1186,87 @@ documented flow.
   (gitignored).
 - `week1_baseline/ruby/07_the_run_dsl/vendor/bundle/` — installed gems,
   copied from `06_the_logger`'s identical lockfile (gitignored).
+
+---
+
+## `python/07_the_run_dsl` — Python port
+
+### 24. No new bugs — port executed per plan, including two reversed "drop" recommendations from `06_the_logger`'s plan
+
+**Problem:** N/A — this entry records a clean port, not a bug fix, per
+[[feedback_port_review_rigor]] (later ports need a real review, not just a
+smoke test note). The full reasoning lives in
+`docs/plans/python_port/07_the_run_dsl.md`; this is the short version.
+
+**What was ported:**
+- New `boukensha/run_dsl.py` (`RunDSL`, exposing only `tool`) and a new
+  `boukensha.run()` function in `__init__.py`, composing the existing
+  `Context`/`Registry`/`Backend`/`PromptBuilder`/`Client`/`Logger`/`Agent`
+  classes — none of which needed any change themselves.
+- Every Ruby `||=` in `Boukensha.run` was translated to an explicit
+  `is None` check, **not** Python's `or`, to avoid the same 0-is-falsy bug
+  class as entries #14/#17/#18. Verified directly: monkeypatched the
+  backend/client so no live API call was needed, called
+  `boukensha.run(task=..., max_output_tokens=0, ...)`, and asserted the
+  `session_start` log line records `max_output_tokens: 0`, not the task's
+  configured default (`1024`). A live smoke test alone — which only ever
+  exercises the real, truthy, configured value — could never have caught
+  a regression here.
+- Ruby's `instance_eval`-based block DSL (bare `tool` calls resolving
+  against an implicit receiver) has no Python equivalent. Translated to an
+  explicit `configure(dsl)` callback where the caller writes
+  `dsl.tool(...)` — a language-level adaptation, not a literal
+  translation, but the same design intent (narrow, single-method tool
+  registration surface, no access to internals).
+- Re-added `mud_host`/`mud_port`/`mud_username`/`mud_password` to
+  `config.py` and `LoopError` to `errors.py`/`__all__` — both had been
+  *deliberately dropped* from Python (and from Ruby) during the
+  `06_the_logger` port, per that port's own plan (§"Judgment calls"),
+  specifically because Ruby had dropped them in that snapshot. Ruby's
+  `07_the_run_dsl` restored both unchanged, so the same stated
+  policy ("keep Python structurally in sync with the current Ruby
+  reference") now reverses that earlier call. Both remain unused in this
+  step in either language — pure structural parity, not a functional need.
+- Added `Logger.turn()`/`Logger.subscribe()`, direct ports of two new
+  (also unused) Ruby methods, for the same structural-parity reason.
+
+**Why / retain:** confirms `06_the_logger`'s port-plan reasoning was
+*conditional on the current Ruby snapshot*, not a permanent decision — a
+"drop for parity" call can flip to "re-add for parity" in a later
+iteration if the Ruby reference itself reverts. **Don't treat a prior
+port's judgment call as settled forever; re-check it against the current
+Ruby diff each time**, the same way path-count bugs (entries #4–#22) had
+to be re-checked per iteration rather than assumed fixed once.
+
+Confirmed working via `./week1_baseline/bin/python/07_the_run_dsl` (needed
+a fresh `.venv` — created with `python3 -m venv .venv && .venv/bin/pip
+install -r requirements.txt`, same as every prior Python iteration) — real,
+live call to `https://api.anthropic.com/v1/messages` using
+`claude-haiku-4-5` through `boukensha.run()`. The resulting
+`.boukensha/sessions/<id>.jsonl` matches `ruby/07_the_run_dsl`'s verified
+session shape exactly: `session_start` (`provider: "anthropic"`), one
+`read_file` `tool_call`/`tool_result` pair, `turn_end`.
+
+**Files changed for this iteration:**
+- `week1_baseline/python/07_the_run_dsl/` — new, copied from
+  `python/06_the_logger`.
+- `week1_baseline/python/07_the_run_dsl/boukensha/run_dsl.py` — new
+  (`RunDSL`).
+- `week1_baseline/python/07_the_run_dsl/boukensha/__init__.py` — added
+  `run()`; re-added `LoopError` to imports/`__all__`.
+- `week1_baseline/python/07_the_run_dsl/boukensha/config.py` — re-added
+  `mud_host`/`mud_port`/`mud_username`/`mud_password` (`is None`-style,
+  matching entry #14's fix).
+- `week1_baseline/python/07_the_run_dsl/boukensha/errors.py` — re-added
+  `LoopError`.
+- `week1_baseline/python/07_the_run_dsl/boukensha/logger.py` — added
+  `turn()`/`subscribe()`, wired subscribers into `_write_log`.
+- `week1_baseline/python/07_the_run_dsl/examples/example.py` — rewritten
+  to use `boukensha.run()`.
+- `week1_baseline/python/07_the_run_dsl/README.md` — rewritten for Step 7.
+- `week1_baseline/bin/python/07_the_run_dsl` — new runner, `chmod u+x`.
+- `week1_baseline/python/07_the_run_dsl/.venv/` — lesson-local virtualenv
+  (gitignored).
+
+Full port plan is in
+[`07_the_run_dsl.md`](plans/python_port/07_the_run_dsl.md).

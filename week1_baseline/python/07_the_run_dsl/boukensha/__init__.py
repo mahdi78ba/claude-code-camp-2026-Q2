@@ -1,0 +1,197 @@
+"""Boukensha — a MUD-playing agent, built from scratch.
+
+Top-level package. Mirrors the Ruby reference's lib/boukensha.rb, which
+requires the config loader, the player task, the tool/message/context
+structs, the tool registry and its error class, the prompt builder and its
+provider backends, the HTTP client, the agent loop, and (as of this
+iteration) the session logger — plus the module-level config/debug
+singleton the logger reads.
+"""
+
+import os
+
+from .config import Config
+from . import tasks
+from .tasks import Player
+from .tool import Tool
+from .message import Message
+from .context import Context
+from .errors import UnknownToolError, UnsupportedModelError, ApiError, LoopError
+from .registry import Registry
+from .prompt_builder import PromptBuilder
+from . import backends
+
+# ---------- module-level config/debug singleton -----------------------
+#
+# Python equivalent of Ruby's `Boukensha` module gaining `config`, `debug!`/
+# `debug?`, and `quiet!`/`loud!`/`quiet?` as module-level state. The
+# accessor is named `get_config`, not `config`: defining a module-level
+# function literally named `config` here would silently shadow the
+# `boukensha.config` *submodule* (the file defining the `Config` class
+# above), which Python's import system already exposes as an attribute of
+# this package the moment it's imported — a collision Ruby doesn't have,
+# since `Config` (the class) and `config` (the method) are distinct
+# identifiers there. Only `get_config()` and `is_debug()` are actually
+# consumed (by `Logger`); `enable_quiet`/`enable_loud`/`is_quiet` are
+# unused in this iteration in either language, shipped for parity.
+
+_quiet = False
+_debug = False
+_config = None
+
+
+def get_config():
+    global _config
+    if _config is None:
+        _config = Config()
+    return _config
+
+
+def enable_debug():
+    global _debug
+    _debug = True
+
+
+def is_debug():
+    return _debug
+
+
+def enable_quiet():
+    global _quiet
+    _quiet = True
+
+
+def enable_loud():
+    global _quiet
+    _quiet = False
+
+
+def is_quiet():
+    return _quiet
+
+
+from .logger import Logger
+from .client import Client
+from .agent import Agent
+from .run_dsl import RunDSL
+
+# ---------- Boukensha.run() -------------------------------------------
+#
+# Python port of Boukensha.run. Every prior step required the caller to
+# build and wire Context, Registry, a Backend, PromptBuilder, Client, and
+# Logger by hand before constructing an Agent. This collapses all of that
+# behind one call: describe *what* to do (a task, and the tools the agent
+# may use), not *how* to plumb it.
+#
+# Ruby's version takes a block and `instance_eval`s it against a RunDSL
+# instance, so a bare `tool` call inside the block resolves as
+# `self.tool`. Python has no equivalent to `instance_eval` — there's no
+# way to make a bare `tool(...)` call inside a function silently resolve
+# against an arbitrary receiver. The Pythonic equivalent is an explicit
+# `configure` callable, invoked as `configure(dsl)`, where the caller
+# writes `dsl.tool(...)` instead of a bare `tool`. This preserves the
+# actual design intent — a single, narrow method surface for registering
+# tools, no access to internals — only the syntax for reaching that
+# surface changes.
+
+
+def run(*, task, system=None, model=None, backend=None, api_key=None,
+        ollama_host="http://localhost:11434", log=None,
+        max_output_tokens=None, configure=None):
+    cfg = get_config()  # loads .env; populates os.environ
+    task_class = Player
+    task_settings = cfg.tasks(task_class.task_name())
+
+    if system is None:
+        system = task_class.system_prompt(
+            task_settings, user_prompts_dir=cfg.user_prompts_dir,
+            default_prompts_dir=Config.PROMPTS_DIR,
+        )
+    if model is None:
+        model = task_class.model(task_settings)
+    if backend is None:
+        backend = task_class.provider(task_settings)
+    if api_key is None:
+        api_key = {
+            "anthropic": os.environ.get("ANTHROPIC_API_KEY"),
+            "openai": os.environ.get("OPENAI_API_KEY"),
+            "gemini": os.environ.get("GEMINI_API_KEY"),
+            "ollama_cloud": os.environ.get("OLLAMA_API_KEY"),
+        }.get(backend)
+
+    ctx = Context(task=task_class, system=system)
+    registry = Registry(ctx)
+
+    if configure is not None:
+        configure(RunDSL(registry))
+
+    if backend == "anthropic":
+        be = backends.Anthropic(api_key=api_key, model=model)
+    elif backend == "openai":
+        be = backends.OpenAI(api_key=api_key, model=model)
+    elif backend == "gemini":
+        be = backends.Gemini(api_key=api_key, model=model)
+    elif backend == "ollama":
+        be = backends.Ollama(host=ollama_host, model=model)
+    elif backend == "ollama_cloud":
+        be = backends.OllamaCloud(api_key=api_key, model=model)
+    else:
+        raise ValueError(
+            f"Unknown backend {backend!r}. Use 'anthropic', 'openai', "
+            f"'gemini', 'ollama', or 'ollama_cloud'."
+        )
+
+    builder = PromptBuilder(ctx, be)
+    client = Client(builder)
+    effective_max_iterations = task_class.max_iterations(task_settings)
+    effective_max_output_tokens = (
+        task_class.max_output_tokens(task_settings)
+        if max_output_tokens is None else max_output_tokens
+    )
+    logger = Logger(log=log, snapshot={
+        "task": task_class.task_name(),
+        "max_iterations": effective_max_iterations,
+        "max_output_tokens": effective_max_output_tokens,
+        "model": model,
+        "provider": backend,
+    })
+    agent = Agent(
+        context=ctx, registry=registry, builder=builder, client=client,
+        logger=logger, task_settings=task_settings,
+        max_iterations=effective_max_iterations,
+        max_output_tokens=effective_max_output_tokens,
+    )
+
+    ctx.add_message("user", task)
+    try:
+        return agent.run()
+    finally:
+        logger.close()
+
+
+__all__ = [
+    "Config",
+    "tasks",
+    "Player",
+    "Tool",
+    "Message",
+    "Context",
+    "UnknownToolError",
+    "UnsupportedModelError",
+    "ApiError",
+    "LoopError",
+    "Registry",
+    "PromptBuilder",
+    "backends",
+    "get_config",
+    "enable_debug",
+    "is_debug",
+    "enable_quiet",
+    "enable_loud",
+    "is_quiet",
+    "Logger",
+    "Client",
+    "Agent",
+    "RunDSL",
+    "run",
+]
