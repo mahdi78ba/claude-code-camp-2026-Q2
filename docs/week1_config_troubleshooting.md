@@ -1270,3 +1270,92 @@ session shape exactly: `session_start` (`provider: "anthropic"`), one
 
 Full port plan is in
 [`07_the_run_dsl.md`](plans/python_port/07_the_run_dsl.md).
+
+---
+
+## `ruby/08_the_repl_loop` — new runner at `week1_baseline/bin/ruby/08_the_repl_loop`
+
+### 25. Same three known bugs as entries #4–#23, all three inherited unfixed into `08_the_repl_loop`
+
+**Problem:** `08_the_repl_loop` copied all three previously-identified
+template bugs forward, unfixed:
+```ruby
+# examples/example.rb
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../.boukensha", __dir__)
+
+# lib/boukensha/config.rb
+PROMPTS_DIR = File.expand_path("../../../prompts", __dir__).freeze
+
+# lib/boukensha/logger.rb
+def provider_name(backend)
+  return nil unless backend
+
+  backend.class.name.split("::").last.gsub(/([a-z\d])([A-Z])/, '\1_\2').downcase
+end
+```
+
+**Fix:** same three one-line fixes as `06_the_logger`/`07_the_run_dsl`
+(entries #19/#20, #23):
+```ruby
+ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../../.boukensha", __dir__)
+PROMPTS_DIR = File.expand_path("../../prompts", __dir__).freeze
+```
+```ruby
+def provider_name(backend)
+  return nil unless backend
+  return "openai" if backend.is_a?(Backends::OpenAI)
+
+  backend.class.name.split("::").last.gsub(/([a-z\d])([A-Z])/, '\1_\2').downcase
+end
+```
+
+**Also needed (per-project, same as every prior iteration):** `bundle
+config set --local path 'vendor/bundle'` before `bundle install` — the
+system gem dir (`/var/lib/gems/3.2.0/cache`) still isn't writable, same
+`Bundler::PermissionError` as entry #6. `Gemfile`/`Gemfile.lock` are
+identical to `07_the_run_dsl`'s (`dotenv` only), so this was a fresh
+`bundle install` into `./vendor/bundle` rather than a copy — either works,
+this session just didn't copy the sibling's `vendor/bundle/` this time.
+
+**Why / retain:** eighth confirmation of entry #8's `BOUKENSHA_DIR` rule,
+fifth of entry #13's `PROMPTS_DIR` rule, third of entry #20's
+`provider_name` rule. Per [[feedback_port_review_rigor]], a clean
+smoke-test run only proves the code paths it happens to exercise — this
+iteration's `provider_name` fix specifically is *not* exercised by the
+Anthropic-backend smoke test below (only reachable via the OpenAI
+backend), so it was verified by direct diff against the already-fixed
+`07_the_run_dsl` copy, not by running it.
+
+Also reviewed (not a bug, a doc/behavior mismatch): the README documents
+`Logger#turn` as printing a `╔══ turn N ══╗` header to the screen at each
+REPL turn. The shipped method only writes to the JSONL session file —
+consistent with `Logger` being a file-only logger since step 6, but it
+means no turn header (and no `/quiet`/`/loud` effect) is actually visible
+in the terminal. See `docs/week1_repl_loop_overview.md` §3 for detail; no
+code change made for this, since adding new stdout output isn't part of
+this step's shipped feature set.
+
+Confirmed working via `./week1_baseline/bin/ruby/08_the_repl_loop` — real,
+live calls to `https://api.anthropic.com/v1/messages` using
+`claude-haiku-4-5` through `Boukensha.repl`, piped stdin exercising: a
+`list_directory` tool call and reply on turn 1, a second turn
+(`what did I just ask you?`) answered correctly from the shared `Context`
+(confirms `Agent#run`'s new `@context.add_message(:assistant, text)` before
+`return text`), `/clear` verified to actually wipe history (a follow-up
+"what number did I mention?" got a correct "no record" answer), and
+`/exit` printing `Goodbye.` and exiting cleanly. The session's `.jsonl` log
+shows two `turn` entries, each starting its own `iteration` count at 1.
+
+**Files changed for this iteration:**
+- `week1_baseline/ruby/08_the_repl_loop/examples/example.rb` — fixed
+  `BOUKENSHA_DIR` `../` count.
+- `week1_baseline/ruby/08_the_repl_loop/lib/boukensha/config.rb` — fixed
+  `PROMPTS_DIR`'s `../` count.
+- `week1_baseline/ruby/08_the_repl_loop/lib/boukensha/logger.rb` — fixed
+  `provider_name`'s OpenAI mislabeling.
+- `week1_baseline/bin/ruby/08_the_repl_loop` — new runner, `chmod u+x`.
+- `week1_baseline/ruby/08_the_repl_loop/.bundle/config` — local bundle path
+  (gitignored).
+- `week1_baseline/ruby/08_the_repl_loop/vendor/bundle/` — installed gems
+  (gitignored).
+- `docs/week1_repl_loop_overview.md` — new overview/review doc.

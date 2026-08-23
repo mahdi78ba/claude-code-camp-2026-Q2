@@ -1,8 +1,10 @@
-ENV["BOUKENSHA_DIR"] ||= File.expand_path("../../../.boukensha", __dir__)
 require_relative "../lib/boukensha"
 
 # Config is loaded automatically inside Boukensha.repl — system prompt, model,
 # and API key all come from ~/.boukensha (or BOUKENSHA_DIR) by default.
+# BOUKENSHA_DIR is exported by bin/ruby/08_the_repl_loop to point at this
+# repo's .boukensha; run this script directly (without that launcher) and it
+# falls back to ~/.boukensha instead.
 
 puts "Config: #{Boukensha.config}"
 puts
