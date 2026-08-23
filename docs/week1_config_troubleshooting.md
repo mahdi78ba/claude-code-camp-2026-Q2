@@ -1359,3 +1359,106 @@ shows two `turn` entries, each starting its own `iteration` count at 1.
 - `week1_baseline/ruby/08_the_repl_loop/vendor/bundle/` — installed gems
   (gitignored).
 - `docs/week1_repl_loop_overview.md` — new overview/review doc.
+
+---
+
+## `python/08_the_repl_loop` — Python port
+
+### 26. No new bugs — port executed per plan, all three "genuinely new" items confirmed via unit-level checks
+
+**Problem:** N/A — this entry records a clean port, not a bug fix, per
+[[feedback_port_review_rigor]] (later ports need a real review, not just a
+smoke test). The full reasoning lives in
+`docs/plans/python_port/08_the_repl_loop.md`; this is the short version.
+An independent `code-review` pass (comparing every changed file against
+its Ruby reference line-by-line) came back with zero findings.
+
+**What was ported:**
+- New `boukensha/repl.py` (`Repl`) and `boukensha/version.py`
+  (`VERSION = "0.8.0"`), plus a new `boukensha.repl()` function in
+  `__init__.py` — same setup as `run()` (config load, system/model/
+  backend/api_key resolution, `Context`/`Registry`/`RunDSL`, backend/
+  builder/client/logger construction), handed off to a `Repl` instead of
+  one `Agent` call.
+- `Context.clear_messages()` — direct port of `clear_messages!`.
+- `Agent.run()`/`_wrap_up()` — added `context.add_message("assistant",
+  ...)` at **all three** return points (normal completion, wind-down
+  success, wind-down `ApiError`), not just the obvious one. Verified with
+  three separate fake-`Client`/fake-`Builder` unit checks (one per return
+  path, since only the normal path is reachable without deliberately
+  forcing a wind-down) — each asserts `context.messages[-1]` is the
+  `"assistant"` message actually returned.
+- `Client.call()` — a `401` now raises `ApiError("authentication failed
+  (401) — check your API key")` instead of the generic attempt-count
+  message. Verified by monkeypatching `urllib.request.urlopen` to raise a
+  canned `HTTPError(code=401)` and asserting the exact message — a live
+  smoke test can't exercise this path without an actually-bad key.
+- `Config._resolve_dir()` — gained the same new middle tier Ruby's
+  `resolve_dir` did: a `.boukensha/` directory in the current working
+  directory, checked before falling back to `~/.boukensha`. Verified by
+  `chdir`-ing into a temp directory containing a `.boukensha/` subdir with
+  `BOUKENSHA_DIR` unset and asserting `Config().dir` resolves there — a
+  live smoke test always runs with `BOUKENSHA_DIR` set, so it can never
+  exercise this tier on its own.
+- Two Ruby idioms with no Python equivalent, both flagged in the port plan
+  and confirmed working as designed rather than "fixed":
+  - `$stdin.gets` returning `nil` on EOF → Python's `input()` *raising*
+    `EOFError` instead. `Repl.start()` wraps the read in
+    `try/except EOFError: break`.
+  - Ruby's `rescue Interrupt` living in `Boukensha.repl`, not
+    `Repl#start` → Python's `repl()` catches `KeyboardInterrupt` around
+    `repl_obj.start()`, leaving `Repl.start()` itself with no signal
+    handling of its own, exactly mirroring where Ruby catches it.
+
+**Why / retain:** same lesson as entry #24 — a clean live smoke test only
+proves the code paths it happens to exercise. Of this iteration's three
+genuinely new behaviors (`Agent` persistence, the 401 message, the config
+cwd tier), **the live smoke test below only exercised the `Agent`
+persistence path** (confirmed by the session log showing correct
+multi-turn recall) — the 401 message and the cwd config tier both needed
+dedicated unit-level checks with fakes/monkeypatches, because triggering
+them for real would require an actually-invalid API key or an actually-set
+cwd `.boukensha/` directory, neither of which a normal smoke test run
+produces. **Always write the offline check for anything a live run can't
+naturally trigger, don't rely on "it ran without erroring."**
+
+Confirmed working via `./week1_baseline/bin/python/08_the_repl_loop` (fresh
+`.venv`, same as every prior Python iteration) — real, live calls to
+`https://api.anthropic.com/v1/messages` using `claude-haiku-4-5` through
+`boukensha.repl()`: a `list_directory` tool call, a follow-up question
+answered from `Context`'s accumulated history, `/clear` verified to
+actually wipe history (a follow-up "what was the first thing I asked you?"
+got "I don't have access to our conversation history before this
+message"), and `/exit` printing `Goodbye.` and exiting cleanly. The
+resulting `.boukensha/sessions/<id>.jsonl` matches `ruby/08_the_repl_loop`'s
+verified session shape exactly, including the `/clear`-resets-the-turn-
+counter behavior from entry #25 (a second `{"phase":"turn","n":1}` entry
+appears in the same session file after the clear).
+
+**Files changed for this iteration:**
+- `week1_baseline/python/08_the_repl_loop/` — new, copied from
+  `python/07_the_run_dsl`.
+- `week1_baseline/python/08_the_repl_loop/boukensha/repl.py` — new
+  (`Repl`).
+- `week1_baseline/python/08_the_repl_loop/boukensha/version.py` — new
+  (`VERSION`).
+- `week1_baseline/python/08_the_repl_loop/boukensha/__init__.py` — added
+  `repl()`; imported `VERSION`/`Repl`; updated `__all__`.
+- `week1_baseline/python/08_the_repl_loop/boukensha/context.py` — added
+  `clear_messages()`.
+- `week1_baseline/python/08_the_repl_loop/boukensha/agent.py` — added the
+  three `add_message("assistant", ...)` calls.
+- `week1_baseline/python/08_the_repl_loop/boukensha/client.py` — added the
+  401-specific `ApiError` message.
+- `week1_baseline/python/08_the_repl_loop/boukensha/config.py` — added the
+  cwd-based middle tier to `_resolve_dir()`.
+- `week1_baseline/python/08_the_repl_loop/examples/example.py` — rewritten
+  to call `boukensha.repl(configure=...)`.
+- `week1_baseline/python/08_the_repl_loop/README.md` — rewritten for
+  Step 8.
+- `week1_baseline/bin/python/08_the_repl_loop` — new runner, `chmod u+x`.
+- `week1_baseline/python/08_the_repl_loop/.venv/` — lesson-local virtualenv
+  (gitignored).
+
+Full port plan is in
+[`08_the_repl_loop.md`](plans/python_port/08_the_repl_loop.md).
