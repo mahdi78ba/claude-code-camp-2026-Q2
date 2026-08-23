@@ -19,6 +19,8 @@ Gem::Specification.new do |spec|
   spec.bindir      = "bin"
   spec.executables = ["boukensha"]
 
-  # The gem ships no external dependencies — net/http and json are stdlib.
+  # net/http and json are stdlib; dotenv is the one external runtime
+  # dependency (lib/boukensha/config.rb requires it to load .env).
   # Users supply their own ANTHROPIC_API_KEY.
+  spec.add_dependency "dotenv", "~> 3.2"
 end

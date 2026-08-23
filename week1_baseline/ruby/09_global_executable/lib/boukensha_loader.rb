@@ -28,7 +28,7 @@ module BoukenshaLoader
         boukensha: BOUKENSHA_PATH is set but no lib/boukensha.rb found at:
                #{dir}
                Make sure BOUKENSHA_PATH points to a step folder, e.g.:
-               BOUKENSHA_PATH=~/Sites/boukensha/07_the_repl_loop boukensha
+               BOUKENSHA_PATH=~/Sites/boukensha/08_the_repl_loop boukensha
       MSG
     end
 
@@ -63,10 +63,10 @@ module BoukenshaLoader
     unless Boukensha.respond_to?(:repl)
       abort <<~MSG
         boukensha: the step at #{step_dir}
-               does not support the interactive REPL (added in step 7).
+               does not support the interactive REPL (added in step 8).
                Run its examples directly, e.g.:
                  ruby #{step_dir}/examples/*.rb
-               Or point BOUKENSHA_PATH at step 7 or later.
+               Or point BOUKENSHA_PATH at step 8 or later.
       MSG
     end
 

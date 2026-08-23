@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+cd "$(dirname "$0")/../../ruby/09_global_executable"
+export BOUKENSHA_DIR="$(cd ../../.. && pwd)/.boukensha"
+bundle exec ruby bin/boukensha

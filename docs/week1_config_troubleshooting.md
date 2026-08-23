@@ -1462,3 +1462,121 @@ appears in the same session file after the clear).
 
 Full port plan is in
 [`08_the_repl_loop.md`](plans/python_port/08_the_repl_loop.md).
+
+---
+
+## `ruby/09_global_executable` — new runner at `week1_baseline/bin/ruby/09_global_executable`
+
+### 27. Bundled `lib/` was forked from a *pre-review* copy of `08_the_repl_loop`: one recurring template bug plus three of `08`'s own fixes missing, plus a new gemspec bug unique to packaging as a gem
+
+**Problem:** unlike `06`/`07`/`08`, which each copy the *previous* folder
+forward, `09_global_executable`'s `lib/` ships as its own independent
+snapshot (per the README: "step 8's lib, bundled as the default"). That
+snapshot predates `08_the_repl_loop`'s review pass (entry #25), so it
+reintroduced one of the long-recurring template bugs plus regressed on all
+three fixes/features that review pass actually added:
+```ruby
+# lib/boukensha/config.rb — recurring template bug (entry #13's family)
+PROMPTS_DIR = File.expand_path("../../../prompts", __dir__).freeze  # resolves to ruby/prompts, doesn't exist
+
+# lib/boukensha/config.rb#resolve_dir — 08's cwd tier missing entirely
+raw = ENV.fetch("BOUKENSHA_DIR", nil) || DEFAULT_DIR   # no cwd/.boukensha check
+
+# lib/boukensha/logger.rb — recurring template bug (entry #20's family)
+# provider_name has no `return "openai" if backend.is_a?(Backends::OpenAI)` case
+
+# lib/boukensha/client.rb — 08's 401-specific message missing
+# just falls through to the generic "API request failed ... (401): ..." raise
+
+# lib/boukensha/repl.rb#banner — 08's API-key/config-exists status line missing
+```
+Confirmed live: `Boukensha::Config::PROMPTS_DIR` resolved to
+`ruby/prompts` (one directory too high, and nonexistent) under the exact
+depth this folder ships at; `Tasks::Base.read_default_prompt` just checks
+`File.exist?` and returns `nil` on a miss, so the failure is **silent** —
+`Boukensha.repl` boots with `system: nil`, no error, no visible symptom
+short of the agent behaving as if it had no system prompt at all.
+
+A second, new-to-this-iteration bug: **the gemspec declares no runtime
+dependency on `dotenv`**, despite its own comment claiming "no external
+dependencies" and `lib/boukensha/config.rb` `require`-ing it
+unconditionally. `dotenv` is not stdlib. Confirmed by building the gem and
+`gem install`-ing it into a throwaway `GEM_HOME` with no bundler in the
+picture: `boukensha` (the actual global executable this whole iteration
+exists to ship) crashed on the first `require "boukensha"` with
+`LoadError: cannot load such file -- dotenv`. This is the one bug in this
+entry that isn't a copy-forward regression — it's specific to packaging
+as a gem, where `Gemfile`/bundler no longer stands between the code and
+its dependencies.
+
+Also found, independent of the code: the README and
+`lib/boukensha_loader.rb` both hardcode step numbers that predate
+`06_the_logger` being inserted into the curriculum, off by one throughout
+— e.g. `lib/boukensha_loader.rb`'s own abort message telling the user to
+run `BOUKENSHA_PATH=~/Sites/boukensha/07_the_repl_loop boukensha`
+(`07_the_repl_loop` doesn't exist; the actual REPL-loop folder is
+`08_the_repl_loop`), and the README's `# Step 8 — Global Executable`
+heading / `cd 08_global_executable` / `gem install boukensha-0.1.0.gem`
+(this folder is step 9, at `09_global_executable`, building
+`boukensha-0.9.0.gem`).
+
+**Fix:** ported `08`'s three fixes/features forward into `09`'s `lib/`
+(the same `PROMPTS_DIR`/`provider_name` one-liners as entries #13/#20's
+family, plus the `resolve_dir` cwd tier and the 401 message verbatim from
+`08_the_repl_loop`, plus the fuller `banner` from `08`'s `repl.rb`); added
+`spec.add_dependency "dotenv", "~> 3.2"` to `boukensha.gemspec`; corrected
+every step-number/folder-name reference in `README.md` and
+`lib/boukensha_loader.rb` to match the current numbering (REPL loop =
+step 8, Run DSL = step 7, this folder = step 9).
+
+**Why / retain:** ninth confirmation of entry #13's `PROMPTS_DIR` rule,
+fourth of entry #20's `provider_name` rule — but the more important
+lesson is new: **a "bundled default lib" that isn't literally copied from
+the prior step's already-reviewed folder will silently drift out of sync
+with that step's fixes.** Per [[feedback_port_review_rigor]], the dotenv
+gemspec bug specifically could not have been caught by running anything
+via `bundle exec` (bundler installs it from the `Gemfile` regardless of
+what the gemspec declares) — it only surfaces once the gem is actually
+built and installed standalone, which is the literal scenario this
+iteration's README instructs the user to perform. Always test a
+packaging step by doing the packaging, not just running the code through
+the same harness every other step used.
+
+Confirmed working via `./week1_baseline/bin/ruby/09_global_executable`
+(bundled default REPL, live Anthropic call): banner shows
+`v0.9.0` / correct `.boukensha` config dir / `anthropic (claude-haiku-4-5)`
+/ `✓ API key set`; the bundled `system.md` prompt is now actually loaded
+(the reply correctly self-identifies as the MUD player, confirming the
+`PROMPTS_DIR` fix); `/exit` prints `Goodbye.` and exits cleanly. Separately
+confirmed `gem build` → `gem install ./boukensha-0.9.0.gem` into an empty
+`GEM_HOME` (no bundler, no `Gemfile` in scope) pulls in `dotenv` as a real
+dependency and the resulting `boukensha` executable runs a live call from
+an unrelated directory — the actual "global executable" behavior this step
+promises. Also confirmed `BOUKENSHA_PATH` switching and the
+`BOUKENSHA_DEBUG=1` trace line both work through the installed gem, with
+corrected step numbers in the "doesn't support the REPL" message.
+
+**Files changed for this iteration:**
+- `week1_baseline/ruby/09_global_executable/lib/boukensha/config.rb` —
+  fixed `PROMPTS_DIR`'s `../` count; restored the cwd `.boukensha` tier in
+  `resolve_dir`.
+- `week1_baseline/ruby/09_global_executable/lib/boukensha/logger.rb` —
+  restored the OpenAI special case in `provider_name`.
+- `week1_baseline/ruby/09_global_executable/lib/boukensha/client.rb` —
+  restored the 401-specific `ApiError` message.
+- `week1_baseline/ruby/09_global_executable/lib/boukensha/repl.rb` —
+  restored the fuller banner (API-key status, config-dir-exists check).
+- `week1_baseline/ruby/09_global_executable/lib/boukensha_loader.rb` —
+  fixed step numbers/folder names in the two abort messages.
+- `week1_baseline/ruby/09_global_executable/boukensha.gemspec` — added the
+  missing `dotenv` runtime dependency.
+- `week1_baseline/ruby/09_global_executable/README.md` — corrected step
+  numbering and version-number examples throughout.
+- `week1_baseline/bin/ruby/09_global_executable` — new runner, `chmod u+x`.
+- `week1_baseline/ruby/09_global_executable/.bundle/config` — local bundle
+  path (gitignored).
+- `week1_baseline/ruby/09_global_executable/vendor/bundle/` — installed
+  gems (gitignored).
+- `docs/week1_global_executable_overview.md` — new overview/review doc.
+- `docs/week1_global_executable_review.md` — new companion doc, scoped to
+  `lib/boukensha_loader.rb`.

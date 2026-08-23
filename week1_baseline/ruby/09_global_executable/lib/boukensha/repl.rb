@@ -86,16 +86,19 @@ module Boukensha
     private
 
     def banner
-      ver = @version || "?.?.?"
+      key_status    = (@api_key.nil? || @api_key.strip.empty?) ? "✗ API key not set" : "✓ API key set"
+      provider_line = "#{@provider || "default"} (#{@model || "default"})  #{key_status}"
+      config_exists = @config_dir && Dir.exist?(@config_dir)
+      config_line   = config_exists ? @config_dir : "#{@config_dir || "(default)"}  ✗ directory not found"
+      ver           = @version || "?.?.?"
 
       <<~BANNER
 
         ╔══════════════════════════════════════╗
         ║  BOUKENSHA MUD Assistant (v#{ver})#{" " * (9 - ver.length)}║
         ╚══════════════════════════════════════╝
-          config:        #{@config_dir || "(default)"}
-          provider:      #{@provider || "(default)"}
-          model:         #{@model || "(default)"}
+          config:    #{config_line}
+          provider:  #{provider_line}
 
           /quiet or /loud   toggle logging
           /clear           reset conversation history
