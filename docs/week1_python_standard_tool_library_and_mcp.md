@@ -11,6 +11,62 @@ This doc is the simpler "what it is and how to use it" companion.
 
 ---
 
+## 0. What we did — session summary
+
+In one sentence: **we ported Ruby's `10_standard_tool_library` to Python
+(three new tool modules, including a generic MCP client), fixed two real
+bugs found along the way, and tuned the agent's system prompt so it stops
+wasting a turn "checking" a MUD connection that's already there.**
+
+Step by step:
+
+1. **Planned the port.** Compared `ruby/10_standard_tool_library` (which
+   already includes its later MCP-integration refactor — the "MUD
+   gameplay via MCP" design is the *current* state of that Ruby step, not
+   a separate later change) against the last-ported Python step,
+   `python/08_the_repl_loop`. Step 09 (`ruby/09_global_executable`) has
+   no Python counterpart — it's pure Ruby gem-packaging (a `.gemspec`, a
+   `bin/boukensha` executable), nothing in it applies to Python. Plan
+   written to
+   [`plans/python_port/10_standard_tool_library.md`](plans/python_port/10_standard_tool_library.md).
+
+2. **Executed the port.** Added three new tool modules —
+   `boukensha/tools/file_system.py`, `shell.py`, `mcp.py` — plus small
+   additions to existing files (`Registry.registered()`,
+   `Context.working_dir`, `Config.mcp_servers()`), and wired all of it
+   into `boukensha.run()`/`boukensha.repl()`. What each piece actually
+   does, with full schema and examples, is §1–§4 below.
+
+3. **Found and fixed two real bugs**, both in the new MCP client's
+   *failure-path* cleanup (a bad server command, or a hung handshake) —
+   neither shows up on a normal successful run, only when something
+   actually goes wrong starting a server. One was a client that could
+   raise instead of being caught; the other was a genuine deadlock
+   between two threads both touching the same subprocess pipe. Full
+   writeup in `docs/week1_config_troubleshooting.md`, entry #31.
+
+4. **Tested the port** by launching the real demo
+   (`bin/python/10_standard_tool_library`) against the actual installed
+   `mud_manager --mcp` server and a live CircleMUD instance — confirmed
+   the agent completes a real gameplay task end to end over MCP. See §6.
+
+5. **Reviewed agent behavior and closed a prompting gap.** The agent was
+   calling `mud_status` defensively before every gameplay action — one
+   wasted turn per run — even though the MCP server already connects and
+   logs in during its own startup, before the agent ever gets a chance to
+   call anything. Weighed three fixes (change the MCP server; teach
+   Boukensha's generic MCP bridge to auto-retry; or just tell the agent
+   in its system prompt) and picked the prompt-only one, since it's the
+   only option that doesn't touch working code or compromise the MCP
+   bridge's genericity. See §8.
+
+6. **Validated the fix and completed the port.** Reran the demo fresh —
+   the agent now goes straight to the gameplay tool over MCP, skipping
+   the defensive check entirely, with identical end-user results and one
+   fewer round trip than before.
+
+---
+
 ## 1. The three tool modules
 
 Before this step, every example had to manually write a `configure`
