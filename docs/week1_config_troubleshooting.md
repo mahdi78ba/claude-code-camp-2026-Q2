@@ -1900,3 +1900,344 @@ doubt, then clean up file handles once the process is confirmed dead.
 
 Full port plan is in
 [`10_standard_tool_library.md`](plans/python_port/10_standard_tool_library.md).
+
+---
+
+## `ruby/11_tui` — delta: carry MCP + loader improvements from `10_standard_tool_library`
+
+### 32. Same off-by-one `../` bug as entries #4/#8/#10/#11/#12/#15/#19/#22, found in `11_tui`'s `examples/example.rb`
+
+**Problem:** `ruby/11_tui/examples/example.rb` computed
+`ENV["BOUKENSHA_DIR"]` with `File.expand_path("../../../.boukensha",
+__dir__)` — 3 `../` from `.../ruby/11_tui/examples`. That lands on
+`week1_baseline/.boukensha`, which doesn't exist (the real config dir is
+one level up, at `claude-code-camp-2026-Q2/.boukensha`, symlinked as
+`~/.boukensha`). `10_standard_tool_library`'s copy of the same file
+already has the correct 4-level path — 11_tui's copy had silently drifted
+back to the broken count. Not caught by any prior smoke test of this step
+because `~/.boukensharc` currently points at `10_standard_tool_library`,
+so nothing has run `11_tui/examples/example.rb` directly in a while.
+
+**Fix:** added the missing `../` level, matching every other fixed
+instance of this bug:
+```ruby
+File.expand_path("../../../../.boukensha", __dir__)
+```
+
+**Why / retain:** eighth confirmation of entry #8's rule, this time found
+via the port-review pass for this delta rather than by running the demo
+and noticing empty output — worth doing the explicit `File.expand_path(...)`
+arithmetic check (or `ruby -e 'puts File.expand_path(...)'` against the
+real dir) on every copy of this line in the repo, not just running the
+happy path, since a working `prompt_override` or an already-correct
+sibling copy can mask this for a long time.
+
+### 33. Flagged, not fixed: `Config::PROMPTS_DIR` off-by-one, identical in both `10_standard_tool_library` and `11_tui`
+
+**Problem:** `lib/boukensha/config.rb`'s `PROMPTS_DIR = File.expand_path(
+"../../../prompts", __dir__)` (3 `../` from `lib/boukensha`) resolves to
+`ruby/prompts` (doesn't exist), not `ruby/<NN_name>/prompts` (needs 2
+`../`, not 3). Confirmed with `ruby -e 'puts File.expand_path(...)'`
+against both `10_standard_tool_library`'s and `11_tui`'s copies — byte-identical,
+same wrong result in both. Currently masked in the live config by
+`settings.yaml`'s `prompt_override: {system: true}`, which makes
+`Tasks::Base.system_prompt` read the user prompts dir
+(`~/.boukensha/prompts/player/system.md`) instead of ever falling through
+to the broken `default_prompts_dir`.
+
+**Fix:** none applied — this predates the MCP work in
+`10_standard_tool_library` (it has the identical bug), so it isn't part of
+what this delta is porting into `11_tui`, and fixing it here would silently
+diverge `11_tui` from the step it's meant to track. Left as a known,
+flagged issue instead.
+
+**Why / retain:** exactly the scenario entry #8's rule warns about — "a
+`PROMPTS_DIR` bug can hide behind a `prompt_override` config that never
+falls through to the broken default." Anyone removing
+`prompt_override: {system: true}` from `settings.yaml`, or relying on
+`default_prompts_dir` directly (e.g. a fresh `.boukensha` with no prompt
+overrides), will hit a silently-wrong prompts path in *either* step.
+Worth a real fix (2 `../`, not 3) the next time either step's `config.rb`
+is touched with commit intent — flagging here so it isn't rediscovered
+from scratch.
+
+**Files changed for this delta:**
+- `ruby/11_tui/lib/boukensha/tools/mcp.rb` — new, copied verbatim from
+  `10_standard_tool_library`.
+- `ruby/11_tui/lib/boukensha/tools/mud.rb` — deleted (not kept as a
+  compatibility shim, matching 10's own decision).
+- `ruby/11_tui/lib/boukensha/registry.rb` — added `registered?`.
+- `ruby/11_tui/lib/boukensha/config.rb` — replaced `mud_host`/`mud_port`/
+  `mud_username`/`mud_password` with `mcp_servers` + `resolve_env`.
+- `ruby/11_tui/lib/boukensha.rb` — `run`/`repl` gained `mcp:` (replacing
+  `mud:`), removed `mud_opts_from_config`; `tui:` keyword and `Tui` wiring
+  untouched.
+- `ruby/11_tui/lib/boukensha/repl.rb` — constructor takes `mcp_servers:`
+  instead of `mud:`; banner's `mud:` line replaced with `mcp servers:`;
+  `mud_status_string`/`probe_mud` (TCP-reachability probing) replaced with
+  `mcp_status_string` (reports already-connected servers, no re-probing).
+  `on_output`/`handle_command`/`run_turn`/public readers untouched.
+- `ruby/11_tui/lib/boukensha_loader.rb` — legacy `MUD_NAME` env-var path
+  now builds an `mcp:` entry instead of the no-longer-accepted `mud:` shape
+  (same fix as `docs/week1_mcp_startup_config_review.md` §6.3, applied here
+  since `11_tui` had the same stale shape).
+- `ruby/11_tui/examples/example.rb` — off-by-one fix (entry #32) + updated
+  comments for `Tools::Mcp`/`mcp_servers:`.
+- `ruby/11_tui/boukensha.gemspec` — `mud_manager` `~> 0.1` → `~> 0.3`.
+- `ruby/11_tui/Gemfile.lock` — `mud_manager` version bumped to match
+  (already installed locally at 0.3.0; `bundle lock --update mud_manager
+  --local` failed only on the pre-existing, unrelated missing `charm`/
+  `bubbletea`/etc. gems in this sandbox, so the two `mud_manager` lines
+  were hand-edited instead).
+- `ruby/11_tui/README.md` — documented the carried-over `Tools::Mcp`
+  switch; corrected the example.rb description.
+
+Verified live: `Config#mcp_servers`, `Registry#registered?`, and
+`Tools::Mcp.register` against the real installed `mud_manager --mcp`
+binary and the repo's actual `~/.boukensha/settings.yaml` — handshake
+succeeded, all 27 real MUD tools registered, and `registry.dispatch("look",
+{})` returned real CircleMUD room text. Full end-to-end `boukensha` boot
+(TUI or `--no-tui`) could **not** be verified in this sandbox: `charm`/
+`bubbletea`/`lipgloss`/`bubbles` aren't installed here, and
+`lib/boukensha.rb` unconditionally `require_relative`s `boukensha/tui`
+(which unconditionally `require "bubbletea"`), so even `--no-tui` fails at
+load time regardless of this delta — pre-existing, confirmed present
+before any of these changes too.
+
+### 34. Flagged, not fixed: three review findings, all confirmed pre-existing/identical in `10_standard_tool_library`
+
+**Problem:** a `code-review` pass over this delta's diff surfaced three
+issues in the ported code:
+1. `Config#resolve_env` (`config.rb`) only special-cases string `env:`
+   values starting with `"$"`; a non-string YAML value (e.g. an unquoted
+   `MUD_PORT: 4000` instead of `"4000"`) passes through unchanged into the
+   `env:` hash handed to `Process.spawn` via `MudManager::Mcp::Client`,
+   which requires string (or nil) values — would raise `TypeError: no
+   implicit conversion of Integer into String` at startup.
+2. `Boukensha.run` computes `mcp_clients` (via `Tools::Mcp.register`) but
+   never uses it — unlike `Boukensha.repl`, which passes the same value
+   into `Repl.new(mcp_servers: mcp_clients)`. Harmless dead local, not a
+   crash.
+3. `Config#dig`'s doc comment still reads `# Fetch a nested key path from
+   settings, e.g. dig(:mud, :host)` — stale now that the `mud:` settings
+   key and its accessors are gone.
+
+**Fix:** none applied. Diffed all three against
+`10_standard_tool_library`'s copies of the same files — byte-identical in
+all three spots. These aren't regressions introduced by this delta; they're
+pre-existing in the exact step this delta was asked to port *from*. Per
+entry #33's reasoning, fixing them only in `11_tui` would make it diverge
+from what `10_standard_tool_library` actually has, rather than track it —
+flagging here instead.
+
+**Why / retain:** the review did its job — it confirmed the port introduced
+no *new* bugs, and surfaced three that predate it. Worth a real fix in
+`10_standard_tool_library` first (then re-port), the next time that step is
+touched with commit intent: `resolve_env` should coerce non-string, non-nil
+values with `.to_s` (mirroring the Python port's entry #31 env-handling
+care), the `dig` comment's example key should be updated, and `run`'s unused
+`mcp_clients` local can just be dropped (`Tools::Mcp.register(...)` called
+for effect, matching the original `Tools::Mud.register(...) if resolved_mud`
+shape) or wired to something, if one ever gets added.
+
+### 35. Repointed `~/.boukensharc` at `11_tui`; found + verified a version-skew bug in `bin/boukensha`'s loader/gem split; corrected entry #34's stale "TUI can't be verified here" claim
+
+**Problem (repoint):** `~/.boukensharc` still pointed at
+`10_standard_tool_library` from earlier work, so plain `boukensha` kept
+loading step 10's code even after `11_tui`'s gem (`0.11.0`, built and
+`gem install --user-install --ignore-dependencies`'d per
+`docs/week1_tui_gem_build_install.md`) became the newest installed
+version. `gem install` doesn't change what `~/.boukensharc` points at —
+it's a separate, independent piece of config, by design (`bin/boukensha`'s
+own `BOUKENSHA_PATH` → `~/.boukensharc` → bundled-gem-default resolution
+order).
+
+**Problem (found along the way):** with `~/.boukensharc` still pointing at
+`10_standard_tool_library` but `boukensha-0.11.0` now the newest installed
+gem, running plain `boukensha` crashed:
+```
+.../10_standard_tool_library/lib/boukensha.rb:128:in `repl': unknown keyword: :tui (ArgumentError)
+	from .../boukensha-0.11.0/lib/boukensha_loader.rb:100:in `load_and_start_repl'
+```
+`bin/boukensha`'s executable + `boukensha_loader.rb` come from whichever
+gem version RubyGems currently considers newest (`0.11.0`, which always
+passes `tui:` into `Boukensha.repl`), but the actual step code loaded is
+whatever `~/.boukensharc`/`BOUKENSHA_PATH` points at (step 10's
+`Boukensha.repl`, which has no `tui:` keyword — added only in step 11).
+The loader and the step library can independently be on different
+"versions," and nothing checks that they're compatible.
+
+**Fix:** repointed `~/.boukensharc`:
+```sh
+echo /home/mahdi/claude-code-camp-2026-Q2/week1_baseline/ruby/11_tui > ~/.boukensharc
+```
+This resolves both problems at once here (11_tui's own `Boukensha.repl` does
+accept `tui:`), but the underlying loader/step version-skew is a real,
+reproducible gap worth knowing about generally: **whenever a newer gem is
+installed than the step directory `~/.boukensharc`/`BOUKENSHA_PATH` points
+at, boot can fail on a keyword-argument mismatch** — not fixed here (out of
+scope for this delta), just recorded.
+
+**Verified (and correcting entry #34's TUI claim):** `charm`/`bubbletea`/
+`lipgloss`/`bubbles`/etc. are now present in `gem list ... -a` in this
+sandbox — they were *not* there when entry #34 was written a short time
+earlier (this environment's gem set isn't static). Re-tested both launch
+modes for real, with `~/.boukensharc` now pointing at `11_tui`:
+- `BOUKENSHA_DEBUG=1 boukensha --no-tui` → `[boukensha] loading from:
+  .../11_tui`, prints the plain-REPL banner (`mcp servers: mud
+  (connected)`), `/exit` → clean shutdown, MCP subprocess closed (`[mud_manager/mcp]
+  server shutting down`).
+- `BOUKENSHA_DEBUG=1 boukensha` (TUI, default) → same debug line, then the
+  real charm/bubbletea alt-screen TUI actually renders: boxed banner,
+  live status line (`boukensha v0.11.0 · claude-haiku-4-5 · ctx 0 · 34
+  tools · <clock>`), input textarea with placeholder text.
+- No orphaned `mud_manager` or `ruby` processes after either run
+  (`pgrep -af mud_manager` / `pgrep -af "ruby.*boukensha"` both empty).
+
+So the "Full end-to-end `boukensha` boot ... could **not** be verified in
+this sandbox" line in entry #34 is now stale — it was accurate at the time
+it was written, not a permanent property of this environment.
+
+**Why / retain:** two lessons. First, "the gems aren't installed" is a
+point-in-time observation in a shared/managed sandbox, not a fact to bake
+into permanent docs without a timestamp or re-check — re-verify before
+citing an old "can't test this here" note as still true. Second, a
+gem-version/step-directory mismatch (loader from one version, step lib
+from another) is a real failure class specific to this repo's
+"gem always wins as latest, but BOUKENSHA_PATH/`.boukensharc` picks the
+actual code" design — worth checking for after installing any new step's
+gem if `~/.boukensharc` isn't being repointed to match in the same breath.
+
+### 36. `MudManager::Session#login` didn't recognize this MUD's duplicate-session takeover message — blocked ~10s then raised `Timeout`, even though login had actually succeeded
+
+**Problem:** re-launching `boukensha` (or anything else) to log the same
+character in a second time while an earlier connection was still open
+didn't hang forever, but it did fail loudly. Reproduced directly at three
+layers to isolate it:
+1. `MudManager::Session#login("dummy", "helloworld")` on a second socket
+   while a first was still connected: took **11.7s** and raised
+   `MudManager::Session::Timeout: read_until /Welcome|Reconnecting|Wrong
+   password/i after ...`.
+2. Raw protocol trace (bypassing `login()`) showed why: this MUD (TBAMUD,
+   CircleMUD-derived) doesn't ask a yes/no reconnect question for a
+   duplicate login — it immediately replies `"You take over your own
+   body, already in use!"` and drops straight into the game, same shape as
+   a normal reconnect. `login()`'s regex
+   (`/Welcome|Reconnecting|Wrong password/i`) simply didn't include that
+   phrase, so none of its three branches matched, and the initial
+   `read_until` blocked for the full default timeout waiting for a pattern
+   that would never arrive (the matching text had already scrolled past —
+   `read_until` only looks at what's buffered/arrives after the call).
+3. At the `Boukensha::Tools::Mcp` layer, this was worse than a slow login:
+   the duplicate `mud_manager --mcp` subprocess calls
+   `MudManager::Mcp::Tools.register` (which calls `session.login`) *before*
+   `Server#run` ever starts answering MCP requests — so the hang meant the
+   whole MCP handshake timed out from the client side
+   (`Timeout.timeout(HANDSHAKE_TIMEOUT)` in `mcp.rb`, 10s) before the
+   subprocess could even respond to `initialize`. Net effect: the second
+   `Boukensha.run`/`.repl` call registered **zero** MUD tools and any tool
+   dispatch raised `Boukensha::UnknownToolError` — a fully broken agent
+   session, from what was, underneath, a successful login.
+
+**Fix:** in `week0_explore/mud_manager/lib/mud_manager/session.rb`
+(canonical source; the installed gem is built from this file), widened the
+prompt match and treated the takeover message the same as a reconnect:
+```ruby
+output = self.read_until(/Welcome|Reconnecting|already in use|Wrong password/i)
+if output =~ /Reconnecting|already in use/i
+  # already in-world, skip menu (linkless reconnect, or a duplicate
+  # session forcibly taking over the existing body)
+elsif output =~ /Welcome/i
+  ...
+```
+Bumped `mud_manager.gemspec` to `0.3.1`, rebuilt, and
+`gem install --user-install --ignore-dependencies` (same reasoning as
+`docs/week1_tui_gem_build_install.md`). Bumped `ruby/11_tui/Gemfile.lock`'s
+locked `mud_manager` version to `0.3.1` to match (its `~> 0.3` dependency
+constraint in `boukensha.gemspec` didn't need to change). Did **not** touch
+`10_standard_tool_library`'s `Gemfile.lock` — out of scope for this
+delta — but it depends on the same `mud_manager ~> 0.3` and will pick up
+this fix too once its lockfile is bumped or it's run without Bundler
+enforcing the older locked patch version, since neither step's
+`bin/boukensha` invokes Bundler at all.
+
+**Verified:** re-ran all three reproduction layers after the fix —
+`Session#login` on the second socket now completes in ~1.8s with no
+exception; `Tools::Mcp.register` for a second, concurrent registration now
+returns `["mud"]` (previously `[]`) and successfully dispatches `look`/
+`check`; a real `boukensha --no-tui` run immediately after another live
+session (`"Connect to the MUD and check your score"`) completed normally.
+`pgrep -af mud_manager` came back empty after every test — no orphaned
+subprocess left holding a hung connection either before or after the fix.
+
+**Why / retain:** the underlying character session had *already* succeeded
+by the time the Ruby-side code gave up and raised — the bug was purely in
+prompt-recognition, not in the MUD, the socket, or the MCP layer. Anywhere
+`read_until(pattern)` gates control flow on a fixed set of expected server
+strings, an untested server response variant (this MUD's specific
+takeover wording) turns into a full default-timeout stall rather than a
+fast, correct branch — worth broadening the pattern (or logging the
+unmatched buffer) the next time a *different* MUD/server under this same
+`mud_manager` gem exhibits a similar "technically fine, but slow and then
+raises" symptom.
+
+### 37. TUI exploration: confirmed the four-zone layout, a real location query, and a real movement command — but only after routing around a known, already-documented `bubbletea` native-extension bug this sandbox can't rebuild
+
+**Problem:** driving the TUI with `tmux send-keys "<full message>" Enter`
+(one burst write for the whole string) reliably dropped almost the entire
+message, leaving only its first character in the input box and never
+submitting. This isn't new: `ruby/11_tui/patches/bubbletea/README.md`
+already documents it precisely — `program_poll_event` in the `bubbletea`
+gem's C extension does one `read()` per call and keeps only the *first*
+key event, discarding every other byte the same `read()` returned. A burst
+write (or fast typing/pastes on some ptys) reliably triggers it. Tried the
+repo's own fix, `patches/bubbletea/patch_bubbletea.rb` (copies the patched
+`program.c`/`extension.h` over the installed gem's sources and rebuilds):
+failed at `ruby extconf.rb` — **no C compiler in this sandbox** (`gcc`/
+`cc`/`clang`/`make` all absent, `sudo` needs a password we don't have),
+same root cause as entry #3. The script correctly stopped before touching
+the installed `.so`, so the currently-installed `bubbletea` extension is
+still the pristine, bug-present build — nothing was left half-patched.
+
+**Fix:** none applied to `bubbletea` itself (blocked on missing compiler,
+environment-level, not a code fix I can make here). Worked around it for
+this exploration only by feeding one real keystroke at a time through
+`tmux send-keys -l -- "$char"` with an 80ms gap between characters (well
+above the poll interval, so no read() ever sees more than one new byte),
+Enter sent as its own separate, isolated call afterward. Every message
+submitted correctly this way.
+
+**Verified, using `tmux new-session` + `capture-pane` (an actual terminal
+emulator, unlike a raw pty log, so the rendered frame is exact) against a
+live `boukensha` (TUI, default `tui: true`) launch:**
+- All four zones render as documented: conversation viewport, live
+  progress line, `boukensha>` input box, always-on status bar
+  (`boukensha v0.11.0 · claude-haiku-4-5 · ctx ... · 34 tools · <clock>`).
+- Asked "Where am I right now?" → agent called a `look`-family MCP tool
+  and answered **"Current Location: By The Temple Altar"** with real
+  exits (North → Behind The Temple Altar, South → The Temple Of
+  Midgaard); progress line showed live `Thinking…`/tool-call frames,
+  turn counter went `0 turns` → `1 turns`, `ctx` `0` → `8.5k`.
+- Sent "Move north one step, then look around..." → progress line showed
+  `2 calls` (move + look) at `iter 3/25`; conversation updated to
+  **"Current Location: Behind The Temple Altar"**, exits now North →
+  The Great Field Of Midgaard, South → By The Temple Altar — matching
+  exactly the North exit reported *before* the move, confirming real,
+  consistent game-state transition (not a hallucinated room). Turn
+  counter → `2 turns`, `ctx` → `22.4k`.
+- `/exit`, then `pgrep -af mud_manager` / `pgrep -af "ruby.*boukensha"`
+  both empty after killing the session — no orphaned MCP subprocess.
+
+**Why / retain:** two things worth remembering separately. First, the
+input-burst bug is real, already fully diagnosed and fixed *in source* by
+someone before this session — this environment just can't compile it
+(missing toolchain), which is an environment gap, not a regression to
+re-litigate. A real user with a normal dev machine (or one where
+`patches/bubbletea/patch_bubbletea.rb` has already been run) types at
+human speed through a real pty and won't usually hit it — the failure
+mode here was specifically driving input programmatically via a single
+fast burst write. Second, for any future automated/scripted interaction
+with this TUI in an environment where the patch can't be applied, use
+per-character sends with a delay comfortably above the poll interval
+(`input_timeout: 50` in `tui.rb`) rather than one string in one write —
+`tmux send-keys -l` per character worked reliably here.

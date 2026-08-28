@@ -178,9 +178,18 @@ module MudManager
       # Enter Password
       self.send_command(password)
 
-      output = self.read_until(/Welcome|Reconnecting|Wrong password/i)
-      if output =~ /Reconnecting/i
-        # already in-world, skip menu
+      output = self.read_until(/Welcome|Reconnecting|already in use|Wrong password/i)
+      if output =~ /Reconnecting|already in use/i
+        # Already in-world, skip menu. Covers two distinct server responses:
+        # a linkless character reconnecting ("Reconnecting"), and a second
+        # login attempt for a character that's still actively connected
+        # elsewhere — this MUD resolves that by forcibly taking over the
+        # existing body ("You take over your own body, already in use!")
+        # rather than prompting, and drops the new link straight into the
+        # game just like a reconnect. Previously unmatched here, so login()
+        # would block for the full read_until timeout and then raise
+        # Timeout — even though the takeover had already succeeded server
+        # side, leaving the session perfectly usable underneath the error.
       elsif output =~ /Welcome/i
         # fresh login, handle menu
         self.send_command(:return) # enter for main menu

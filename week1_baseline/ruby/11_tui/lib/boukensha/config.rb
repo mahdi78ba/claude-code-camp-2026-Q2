@@ -34,22 +34,24 @@ module Boukensha
       File.join(@dir, "prompts")
     end
 
-    # ---------- MUD connection --------------------------------------------
+    # ---------- MCP servers -------------------------------------------------
 
-    def mud_host
-      dig(:mud, :host) || "localhost"
-    end
-
-    def mud_port
-      dig(:mud, :port) || 4000
-    end
-
-    def mud_username
-      dig(:mud, :username)
-    end
-
-    def mud_password
-      dig(:mud, :password)
+    # [{name:, command: [...], env: {...}, prefix:}, ...] from settings.yaml's
+    # mcp_servers: list. An env value of the literal form "$VAR" resolves
+    # against ENV (already populated from .env by load_env) instead of being
+    # taken as a literal string — settings.yaml is documented above as
+    # commit-safe, so a real credential should never have to sit in it as
+    # plaintext just because this file is the only place to configure an MCP
+    # server's connection details.
+    def mcp_servers
+      (dig(:mcp_servers) || []).map do |entry|
+        {
+          name:    entry["name"],
+          command: Array(entry["command"]),
+          env:     resolve_env(entry["env"] || {}),
+          prefix:  entry["prefix"]
+        }
+      end
     end
 
     # ---------- low-level helpers -----------------------------------------
@@ -91,6 +93,10 @@ module Boukensha
       else
         {}
       end
+    end
+
+    def resolve_env(raw)
+      raw.transform_values { |v| v.is_a?(String) && v.start_with?("$") ? ENV[v[1..]] : v }
     end
   end
 end

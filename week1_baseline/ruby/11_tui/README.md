@@ -4,6 +4,23 @@ Boukensha now ships a full terminal UI (TUI) built on the [`charm`](https://gith
 
 ## What's new
 
+### `Boukensha::Tools::Mcp` (carried forward from step 10)
+
+This step now tracks step 10's later `Tools::Mcp` refactor (it originally
+shipped on the pre-refactor step 10, which used a MUD-specific
+`Tools::Mud`). `Tools::Mcp.register(registry, servers:)` is the generic
+bridge to any number of configured MCP servers — for the MUD case, that's
+`mud_manager`'s own bundled MCP server, spawned as a subprocess and proxied
+tool-for-tool into the registry — rather than a hand-registered, MUD-specific
+tool set living directly in this process.
+
+Config moved with it: `settings.yaml`'s `mud:` block is gone, replaced by an
+`mcp_servers:` list (`config.mcp_servers`), and `Boukensha.run`/`.repl` take
+`mcp:` instead of `mud:`. `mud_manager` bumped to `~> 0.3` accordingly. See
+step 10's README for the full `mcp_servers:` config shape and
+`Tools::Mcp`'s collision-handling/`prefix:` behavior — this step didn't
+change any of that, just adopted it.
+
 ### `Boukensha::Tui`
 
 New class. Wraps a `Repl` instance and replaces its raw `puts`/`gets` I/O with a structured four-zone display:
@@ -68,8 +85,10 @@ Every structured log event (`:iteration`, `:tool_call`, `:tool_result`, `:respon
 ## Run Example
 
 The TUI is interactive, so it's run via the global `boukensha` executable
-rather than `examples/example.rb` (that file is the step 10 MUD demo, carried
-over unchanged — it doesn't exercise the TUI).
+rather than `examples/example.rb` (that file is the step 10 MUD demo — it
+doesn't exercise the TUI. It now uses `Tools::Mcp` like the rest of this
+step; only its `BOUKENSHA_DIR` path depth was fixed, see
+`docs/week1_config_troubleshooting.md`).
 
 ```sh
 # Build and install this step's gem. If a later step's gem is already
