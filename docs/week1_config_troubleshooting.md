@@ -2717,3 +2717,115 @@ fast, deterministic way to test a "only matters at 85%+ usage" code path
 without needing a real, long, expensive conversation to actually reach
 it — worth reusing for any future check of compaction/budget logic in
 this codebase, rather than trying to naturally exhaust a 200k window.
+
+## `python/12_context` — executed `docs/plans/python_port/12_context.md`; found and fixed two real bugs while verifying it live, neither pre-existing-and-flagged, both actually fixed
+
+### 45. Implemented the plan, then the live check surfaced a genuine, pre-existing crash in `python/11_tui`'s TUI — not something this port introduced, but blocking a real step-12 feature, so fixed rather than just flagged
+
+**What was done:** copied `python/11_tui` into `python/12_context`
+(confirmed byte-identical first), then implemented
+`docs/plans/python_port/12_context.md` — `boukensha/models.py` (new),
+`Context`'s token/compaction fields and methods, `Agent`'s
+`max_turn_tokens`/`_record_usage`/`_compact_if_needed`, `Logger.prompt`'s
+new `context_window` kwarg and the new `Logger.compaction` method,
+`Config.agent_max_turn_tokens`/`agent_compaction_threshold`, `Repl`'s
+`/compact`, `run()`/`repl()`'s `context_window=`, and `tui.py`'s ctx
+display + colour coding + compaction-event handling. Kept Python's
+existing `task_settings`/`Tasks::Player` plumbing and `Logger`'s
+multi-backend usage normalization untouched, per the plan's own scoping
+decision (that's a pre-existing, unrelated divergence in
+`ruby/12_context`, not step 12's actual content).
+
+**Problem found while verifying live (in a real `tmux` session, per this
+doc's established pattern):** typing `/compact` crashed the entire app:
+```
+RuntimeError: The `call_from_thread` method must run in a different thread from the app
+```
+Traced it to `Tui._on_repl_output`, which *always* called
+`self.call_from_thread(...)` — correct for the one case it was written
+for (agent-turn output arriving from the turn's worker thread), but
+`Repl.handle_command("/compact")` calls the exact same output callback
+synchronously from the main/event-loop thread (via `on_input_submitted`),
+and `call_from_thread` raises if you're already on the app's own thread.
+**Confirmed this predates step 12 entirely**: reproduced the identical
+crash typing `/clear` on a completely untouched, freshly-checked-out
+`python/11_tui` — same file, same bug, nothing to do with `/compact`
+specifically. `/compact` just happened to be the first slash command
+this session tried typing live in the Python TUI.
+
+**Why fixed here, not just flagged (unlike entries #33/#34/#41's Ruby
+precedent):** those entries deliberately left pre-existing bugs alone
+because fixing them would diverge the *delta target* from the *source
+step* it's tracking, when the bug lived in code this step wasn't meant to
+touch. This is different: `/compact` is this step's own headline feature,
+delivered through the exact code path this bug breaks — a "successful
+verification" that silently avoided ever typing a slash command would not
+actually have verified the feature works. Fixing a blocking, one-line-root-
+cause bug encountered *while doing the verification the task asked for* is
+different from opportunistic drive-by fixing.
+
+**Fix:** track the app's own thread id (`self._main_thread_id =
+threading.get_ident()` in `on_mount`); `_on_repl_output` now calls the
+widget directly when already on that thread, and only hops via
+`call_from_thread` when actually crossing threads:
+```python
+def _on_repl_output(self, text: str) -> None:
+    conversation = self.query_one("#conversation", RichLog)
+    if threading.get_ident() == self._main_thread_id:
+        conversation.write(text)
+    else:
+        self.call_from_thread(conversation.write, text)
+```
+Verified fixed: `/compact` (and, by the same code path, `/clear`) no
+longer crash; a real agent turn afterward still works normally.
+
+### 46. Second bug, found immediately after fixing #45: `/compact`'s own numbers didn't update on screen until something else happened to redraw
+
+**Problem:** with #45 fixed, `/compact` no longer crashed, but the status
+bar kept showing the *pre*-compaction `ctx` value until an unrelated
+event (e.g. the next agent turn) forced a redraw. Root cause:
+`Tui._tick()` only called `_refresh_progress()`/`_refresh_status()` when
+at least one event had been drained from the logger-event queue that
+tick. A manual `/compact` mutates `self.repl.context` directly and never
+goes through `Agent`/`Logger` at all, so it produces zero events — the
+exact case this gating logic didn't account for.
+
+**Fix:** removed the gate — `_tick()` now calls both refresh methods
+unconditionally, every tick, matching `ruby/12_context`'s own `tui.rb`
+(which recomputes `render_progress`/`render_status` fresh every render
+cycle regardless of what triggered it). Cheap at `TICK_SECONDS = 0.1`:
+each call is just string formatting plus one `Static.update()`.
+
+**Also simplified while fixing this:** `Tui` had been tracking its own
+`self._current_tokens` mirror of the response's `input_tokens`, updated
+only via the logger-event queue — a second, independent copy of what
+`Context.current_tokens` already tracks directly (the same `Context`
+object `Agent.record_usage` mutates in place). Removed the mirror
+entirely; `_refresh_progress`/`_refresh_status` now read
+`self.repl.context.current_tokens` directly. Beyond being simpler, this
+closes off an entire class of future bugs: a compaction resets
+`Context.current_tokens` to `0` immediately, but a separate mirror
+updated only by a `"response"` event has no way to learn about that reset
+at all — exactly the kind of staleness entry #45/#46 were about, just
+structurally prevented instead of patched.
+
+**Verified, live, after both fixes together:** real task → `ctx
+4.0k/200.0k (2%)`; `/compact` → `(compacted context — 3 messages
+dropped)` appears immediately, status bar drops to `ctx 0/200.0k (0%)` in
+the same tick, no crash; sent another real message afterward and it
+worked normally (`ctx 4.1k/200.0k (2%)`). Also re-confirmed automatically
+(offline, stubbed client, no live API): a tiny `context_window=2000`
+context exceeds the 85% threshold after one stubbed turn, and the very
+next `Agent.run()` call fires `_compact_if_needed()` on its own —
+`logger.compaction` invoked, message count drops — matching the Ruby-side
+check in entry #44's methodology. No orphaned `mud_manager`/`python`
+processes after any of the `tmux` sessions used for this verification.
+
+**Why / retain:** "verify it starts and displays something" is a much
+weaker bar than "verify the thing a user would actually do (type a slash
+command) doesn't crash the whole app" — the crash in #45 was invisible
+until someone actually pressed Enter on `/compact`, and the staleness bug
+in #46 was invisible until someone compared the number on screen against
+what should be true, not just whether *a* number was showing. Both are
+reminders that a live smoke test needs to actually exercise the specific
+interaction being verified, not just confirm the app boots.
