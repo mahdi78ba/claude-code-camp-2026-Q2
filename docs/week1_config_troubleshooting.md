@@ -2241,3 +2241,128 @@ with this TUI in an environment where the patch can't be applied, use
 per-character sends with a delay comfortably above the poll interval
 (`input_timeout: 50` in `tui.rb`) rather than one string in one write —
 `tmux send-keys -l` per character worked reliably here.
+
+### 38. `python/11_tui` — executed the port plan (`docs/plans/python_port/11_tui.md`); Textual TUI verified live, no equivalent of Ruby's burst-input bug hit
+
+**Problem:** none — this entry records verification of a completed port,
+not a bug. Recorded per this doc's own convention of confirming each
+iteration actually works, not just "it imported."
+
+**What was done:** `python/11_tui` copied from `python/10_standard_tool_library`
+(confirmed byte-identical pre-port), then per the port plan: `requirements.txt`
+gained `textual==8.2.8`; `boukensha/repl.py` refactored (`on_output`,
+`handle_command` returning `"quit"`/`"command"`/`None`, public `run_turn`/
+`banner`, `/quiet`/`/loud` and the dead `enable_quiet`/`enable_loud`/
+`is_quiet` module state removed — matching Ruby's own step-11 removal);
+`boukensha/__init__.py`'s `repl()` gained `tui=True`, dispatching to the
+new `boukensha/tui.py` (a `textual.app.App` subclass — new code, not a
+port, since no Python library wraps Bubble Tea's own Go code) or the
+plain `Repl.start()`; new `examples/repl.py` launcher + `bin/python/11_tui`
+runner (`--no-tui` passthrough); `VERSION` bumped to `0.11.0`; `README.md`
+rewritten for step 11.
+
+**Verified, layered exactly per the port plan's own verification
+section:**
+1. Offline: unit-tested `Repl.handle_command`/`on_output`/`run_turn`
+   against a stubbed `Agent` (no live API) — all pass.
+2. Textual's own `App.run_test()` harness (`pilot.press(...)` to simulate
+   real keystrokes, no real terminal needed): banner renders on mount,
+   typed input submits and reaches `run_turn` via the background worker,
+   output routes back into the conversation log via `call_from_thread`,
+   `/clear` reaches `handle_command`. Then a second `run_test()` pass
+   wired a *real* `Logger`/`Repl`/`Context`/`Registry` (only `Agent`
+   stubbed) through a real `Tui` instance and confirmed logger events
+   (`iteration`, `tool_call`, `tool_result`, `response`) correctly drive
+   `_turn_count`/`_session_input_tokens` via the queue-drained-on-a-tick
+   path — the full pipeline, not just isolated pieces.
+3. Full live smoke test, both modes, against the real Anthropic backend
+   and the real `mud_manager --mcp`/CircleMUD setup:
+   - `./bin/python/11_tui --no-tui` (piped input): banner, live MUD
+     connection, a real question answered correctly.
+   - `./bin/python/11_tui` (default, Textual TUI) via `tmux` (a real
+     terminal emulator, same technique as Ruby's own TUI verification):
+     all four zones rendered; asked "Where am I right now?" → answered
+     **"Behind The Temple Altar"** (`ctx 0 → 6929`, `0 → 1 turns`); sent a
+     movement command → progress line showed `Thinking…` live, then
+     conversation updated to **"The Great Field Of Midgaard"** — the
+     exact same two rooms and the same north-exit transition Ruby's own
+     TUI verification (entry #37) produced, confirming both language
+     ports drive the identical live CircleMUD state correctly. `/exit`,
+     then `pgrep -af mud_manager` / `pgrep -af "python.*repl.py"` both
+     empty — clean shutdown, no orphaned MCP subprocess.
+
+**Why / retain:** unlike Ruby's `bubbletea` (native extension, needed a
+compiler this sandbox doesn't have — entry #37), `textual` is pure Python
+and installed without any friction, so this port's TUI could be verified
+completely end-to-end in one sitting, live keystrokes included, with
+nothing left as "environment-blocked." Worth remembering the concrete
+comparison point next time a Ruby-side environment limitation shows up:
+check whether the Python side actually has the same limitation before
+assuming it does — here it didn't.
+
+### 39. Code-review pass on `python/11_tui`'s new `tui.py` found two real bugs, both new (not shared with Ruby); both fixed and reverified
+
+**Problem 1 — double-submission / concurrent turns could corrupt shared
+state.** `on_input_submitted` had no guard against a second Enter (or
+Ctrl+L) firing while `Repl.run_turn()` was still executing on the
+previous turn's worker thread. Textual's `@work(thread=True,
+exclusive=True)` does *not* stop an in-flight blocking call when a new
+one starts — `exclusive=True` only cancels the *tracking* of the old
+worker; `Worker.cancel()` just sets a flag/event that `Agent.run()` never
+checks. So a fast double-Enter (or Enter then Ctrl+L) could let two
+threads concurrently mutate the same unsynchronized `Context.messages`
+list and `Repl.turn` counter.
+
+**Fix 1:** added a `self._turn_in_flight` bool. Set `True` on the main
+thread immediately before dispatching `_run_turn_worker`; a new message
+or `/clear`/Ctrl+L submitted while it's `True` is rejected with a visible
+"(still working on the previous message…)" / "(a turn is still
+running…)" note instead of starting a second turn. Cleared back to
+`False` only in `_handle_event`'s `"turn_complete"` branch (main thread,
+during the same tick-drain as every other state mutation in this class)
+— not from the worker thread — so every write to the flag happens on the
+main thread and no lock is needed for this simple check-then-act.
+
+**Problem 2 — token counter silently stuck at 0 for 4 of 5 backends.**
+`_handle_event`'s `"response"` branch read `event["usage"]["input_tokens"]`
+directly — but that's Anthropic's own key name. OpenAI uses
+`prompt_tokens`, Gemini `promptTokenCount`, Ollama `prompt_eval_count`.
+`boukensha/logger.py`'s `Logger._execution_metadata` already normalizes
+all of these into top-level `input_tokens`/`output_tokens` keys on the
+same `"response"` event (via `_usage_tokens`/`_first_integer`) — `tui.py`
+just wasn't using it, and re-derived from the raw per-backend `usage`
+dict instead.
+
+**Fix 2:** read `event.get("input_tokens")` (the already-normalized
+top-level key) instead of digging into `event["usage"]`. No new
+dependency on `Logger`'s internals needed — the event already carries the
+normalized value.
+
+**Verified:** re-ran the full offline/`run_test()` suite from entry #38
+(still passes), plus two new targeted checks: (1) a stub agent that
+sleeps mid-turn, with a second Enter and a Ctrl+L both sent while the
+first turn is still in flight — `run_turn` confirmed called exactly
+once, both rejection messages appeared in the conversation log, and a
+third message submitted *after* the first turn completed was correctly
+accepted (guard releases properly, doesn't get stuck locked); (2) a stub
+`response` event shaped like OpenAI's (`{"prompt_tokens": 250,
+"completion_tokens": 40}`) correctly added `250` to
+`self._session_input_tokens`. One false start while writing check (1):
+the first attempt used a 0.6s stub-agent sleep, shorter than the actual
+wall-clock time `pilot.press()`-per-character typing took in the test
+harness, so the guard had already legitimately released by the time the
+second Enter was processed — not a bug, a test-timing mistake; a 3s sleep
+made the intended race window unambiguous and the test now genuinely
+proves the guard.
+
+**Why / retain:** both bugs were introduced by this port specifically
+(new code, `boukensha/tui.py` — not present in Ruby's `tui.rb`, which
+doesn't have this exact race either, since Ruby's own equivalent has no
+guard against rapid double-submission — worth fixing in Ruby too,
+flagged separately rather than silently carried as "matches Ruby").
+General lesson for any future `@work(thread=True)` usage in this
+codebase: a Textual worker's `exclusive=True`/`cancel()` is not a
+substitute for an explicit application-level "is a turn already running"
+flag if the wrapped call is a blocking, uninterruptible Python call —
+Textual can stop *tracking* a worker on your behalf, but it cannot make
+`time.sleep`/`requests`/`agent.run()` return early.
