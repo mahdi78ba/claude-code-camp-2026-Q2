@@ -8,9 +8,11 @@
 # Config directory (settings.yaml, .env, system.md) is separate:
 #   BOUKENSHA_DIR=~/.boukensha  (default; set to override)
 #
-# MUD connection details come from settings.yaml (mud: block) by default.
-# The legacy MUD_NAME / MUD_HOST / MUD_PORT / MUD_PASSWORD env vars are still
-# honoured and take precedence over config when set.
+# MCP server connection details come from settings.yaml (mcp_servers: list)
+# by default. The legacy MUD_NAME / MUD_HOST / MUD_PORT / MUD_PASSWORD env
+# vars are still honoured and take precedence over config when set — they
+# build one "mud" entry for the mcp: keyword, same shape as a settings.yaml
+# entry would produce.
 #
 # Examples:
 #   boukensha                                                              # uses bundled lib + ~/.boukensha
@@ -82,15 +84,18 @@ module BoukenshaLoader
     if ENV["MUD_NAME"]
       # Legacy env-var override still works and takes precedence over config.
       repl_opts[:working_dir] = false
-      repl_opts[:mud] = {
-        host:     ENV.fetch("MUD_HOST",     "localhost"),
-        port:     ENV.fetch("MUD_PORT",     "4000").to_i,
-        name:     ENV.fetch("MUD_NAME"),
-        password: ENV.fetch("MUD_PASSWORD") { abort "boukensha: MUD_NAME is set but MUD_PASSWORD is missing." }
-      }
+      repl_opts[:mcp] = [{
+        name: "mud",
+        env: {
+          "MUD_HOST"     => ENV.fetch("MUD_HOST", "localhost"),
+          "MUD_PORT"     => ENV.fetch("MUD_PORT", "4000"),
+          "MUD_NAME"     => ENV.fetch("MUD_NAME"),
+          "MUD_PASSWORD" => ENV.fetch("MUD_PASSWORD") { abort "boukensha: MUD_NAME is set but MUD_PASSWORD is missing." }
+        }
+      }]
     end
-    # If MUD_NAME is not set, Boukensha.repl will fall back to config.mud_* values
-    # automatically (via mud_opts_from_config inside Boukensha.repl).
+    # If MUD_NAME is not set, Boukensha.repl will fall back to
+    # config.mcp_servers (settings.yaml's mcp_servers: list) automatically.
 
     Boukensha.repl(**repl_opts)
   end

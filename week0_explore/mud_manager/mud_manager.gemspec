@@ -1,6 +1,6 @@
 Gem::Specification.new do |spec|
   spec.name        = "mud_manager"
-  spec.version     = "0.3.1"
+  spec.version     = "0.3.2"
   spec.summary     = "MudManager — CircleMUD session management, command primitives, and an MCP server"
   spec.description = "Provides MudManager::Session (a long-lived telnet connection with " \
                      "background buffering and IAC stripping), MudManager::Primitives " \
@@ -14,7 +14,14 @@ Gem::Specification.new do |spec|
                      "0.3.1: Session#login now recognizes a duplicate-session takeover " \
                      "(\"already in use\") the same way it already recognized a linkless " \
                      "reconnect, instead of blocking for the full read_until timeout and " \
-                     "raising Timeout on an already-successful login."
+                     "raising Timeout on an already-successful login. " \
+                     "0.3.2: Mcp::Client now captures the spawned server's stderr (via " \
+                     "Open3.popen3 instead of popen2) and its exit status, and includes " \
+                     "both in the error raised when the connection closes unexpectedly — " \
+                     "previously a crashed server (bad host, bad credentials, a raised " \
+                     "exception) surfaced only as a generic \"server closed the " \
+                     "connection\", with the real cause visible nowhere but the terminal " \
+                     "the client happened to inherit stderr from."
   spec.authors     = ["Andrew Brown"]
   spec.email       = ["andrew@exampro.co"]
   spec.license     = "MIT"

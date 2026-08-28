@@ -32,10 +32,12 @@ module Boukensha
   #
   # shell_timeout:    Seconds before a run_command is killed (default 30).
   #
-  # mud:              Hash of MUD connection options — registers all MUD gameplay
-  #                   tools and keeps a single session alive across every tool call.
-  #                   When nil (default), config.mud_* values are used if mud_host
-  #                   is set in settings.yaml. Pass mud: false to disable entirely.
+  # mcp:              Array of MCP server configs ({name:, command:, env:}) —
+  #                   registers every tool each configured server exposes,
+  #                   keeping one client (and one subprocess) alive per server
+  #                   across every tool call. When nil (default), config.mcp_servers
+  #                   (settings.yaml's mcp_servers: list) is used. Pass mcp: false
+  #                   to disable entirely, or mcp: [] for the same effect.
   def self.run(
     task:,
     system:           nil,
@@ -49,7 +51,7 @@ module Boukensha
     working_dir:      Dir.pwd,
     allowed_commands: nil,
     shell_timeout:    30,
-    mud:              nil,
+    mcp:              nil,
     &block
   )
     cfg     = config                           # loads .env; populates ENV
@@ -73,9 +75,9 @@ module Boukensha
                             timeout: shell_timeout, allowed_commands: allowed_commands)
     end
 
-    # mud: nil means "use config if host is set"; mud: false means "skip entirely"
-    resolved_mud = mud == false ? nil : (mud || mud_opts_from_config(cfg))
-    Tools::Mud.register(registry, **resolved_mud) if resolved_mud
+    # mcp: nil means "use config's mcp_servers: list"; mcp: false means "skip entirely"
+    resolved_mcp = mcp == false ? [] : (mcp || cfg.mcp_servers)
+    mcp_clients  = resolved_mcp.any? ? Tools::Mcp.register(registry, servers: resolved_mcp) : []
 
     RunDSL.new(registry).instance_eval(&block) if block
 
@@ -125,7 +127,7 @@ module Boukensha
     working_dir:      Dir.pwd,
     allowed_commands: nil,
     shell_timeout:    30,
-    mud:              nil,
+    mcp:              nil,
     tui:              true,
     &block
   )
@@ -150,8 +152,8 @@ module Boukensha
                             timeout: shell_timeout, allowed_commands: allowed_commands)
     end
 
-    resolved_mud = mud == false ? nil : (mud || mud_opts_from_config(cfg))
-    Tools::Mud.register(registry, **resolved_mud) if resolved_mud
+    resolved_mcp = mcp == false ? [] : (mcp || cfg.mcp_servers)
+    mcp_clients  = resolved_mcp.any? ? Tools::Mcp.register(registry, servers: resolved_mcp) : []
 
     RunDSL.new(registry).instance_eval(&block) if block
 
@@ -189,7 +191,7 @@ module Boukensha
       model:      model,
       version:    VERSION,
       api_key:    api_key,
-      mud:        resolved_mud
+      mcp_servers: mcp_clients
     )
 
     if tui && defined?(Tui)
@@ -203,19 +205,6 @@ module Boukensha
     logger&.close
   end
 
-  # Build a mud options hash from config (used when mud: nil is passed to run/repl).
-  # Returns nil if no MUD host is configured.
-  def self.mud_opts_from_config(cfg)
-    return nil unless cfg.mud_host && cfg.mud_username
-
-    {
-      host:     cfg.mud_host,
-      port:     cfg.mud_port,
-      name:     cfg.mud_username,
-      password: cfg.mud_password
-    }
-  end
-  private_class_method :mud_opts_from_config
 end
 
 require_relative "boukensha/tool"
@@ -238,5 +227,5 @@ require_relative "boukensha/run_dsl"
 require_relative "boukensha/repl"
 require_relative "boukensha/tools/file_system"
 require_relative "boukensha/tools/shell"
-require_relative "boukensha/tools/mud"
+require_relative "boukensha/tools/mcp"
 require_relative "boukensha/tui"

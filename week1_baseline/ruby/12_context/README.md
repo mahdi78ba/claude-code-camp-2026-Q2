@@ -71,6 +71,25 @@ Emitted whenever auto- or manual compaction runs. The TUI subscribes to this eve
 Boukensha.repl(context_window: 128_000)  # for a smaller model
 ```
 
+### `Boukensha::Tools::Mcp` (carried forward from step 11)
+
+This step now tracks step 11's `Tools::Mcp` refactor (it originally forked
+from the pre-refactor `Tools::Mud`, which registered MUD gameplay tools
+directly in-process against a live CircleMUD connection).
+`Tools::Mcp.register(registry, servers:)` is the generic bridge to any
+number of configured MCP servers — for the MUD case, that's
+`mud_manager`'s own bundled MCP server, spawned as a subprocess and proxied
+tool-for-tool into the registry — rather than a hand-registered,
+MUD-specific tool set living directly in this process.
+
+Config moved with it: `settings.yaml`'s `mud:` block is gone, replaced by an
+`mcp_servers:` list (`config.mcp_servers`), and `Boukensha.run`/`.repl` take
+`mcp:` instead of `mud:`. `mud_manager` bumped to `~> 0.3` accordingly. See
+step 10/11's README for the full `mcp_servers:` config shape and
+`Tools::Mcp`'s collision-handling/`prefix:` behavior — this step didn't
+change any of that, just adopted it (context-window tracking and
+compaction, above, are this step's own addition on top).
+
 ## Run the demo
 
 gem uninstall boukensha

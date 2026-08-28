@@ -2366,3 +2366,354 @@ substitute for an explicit application-level "is a turn already running"
 flag if the wrapped call is a blocking, uninterruptible Python call —
 Textual can stop *tracking* a worker on your behalf, but it cannot make
 `time.sleep`/`requests`/`agent.run()` return early.
+
+## `ruby/12_context` — delta: carry MCP + loader improvements from `11_tui`
+
+`12_context` forked before `11_tui`'s own MCP delta (entries #32–#36) landed,
+so it still had the pre-refactor `mud:`/`Tools::Mud` shape layered underneath
+its own, independent context-window/compaction work (`Context#current_tokens`,
+`/compact`, `agent_max_turn_tokens`, etc. — untouched by this delta). This
+section ports the same MCP refactor `11_tui` already tracks from
+`10_standard_tool_library`, one step further down the line.
+
+### 40. Same off-by-one `../` bug as entries #4/#8/#10/#11/#12/#15/#19/#22/#32, found in `12_context`'s `examples/example.rb`
+
+**Problem:** `ruby/12_context/examples/example.rb` computed
+`ENV["BOUKENSHA_DIR"]` with `File.expand_path("../../../.boukensha",
+__dir__)` — 3 `../` from `.../ruby/12_context/examples`, landing on
+`week1_baseline/.boukensha` (doesn't exist) instead of the real
+`<repo-root>/.boukensha`. Confirmed with `ruby -e 'puts
+File.expand_path(...)'` before and after.
+
+**Fix:** added the missing `../` level, matching `11_tui`'s already-fixed
+copy:
+```ruby
+File.expand_path("../../../../.boukensha", __dir__)
+```
+
+**Why / retain:** ninth confirmation of entry #8's rule. `12_context` sits
+at the same directory depth as `11_tui` (`ruby/<NN_name>/examples`), so it
+inherited the identical bug rather than a new variant — worth checking
+this exact line in every remaining step folder before assuming it's fixed
+just because a sibling step already got the fix.
+
+### 41. Flagged, not fixed: two review findings carried over verbatim from `11_tui`
+
+**Problem:** same as entry #34, one step further down the chain:
+1. `Config#resolve_env` (`config.rb`) only special-cases string `env:`
+   values starting with `"$"`; a non-string YAML value (e.g. an unquoted
+   `MUD_PORT: 4000`) passes through unchanged into the `env:` hash handed
+   to `Process.spawn` via `MudManager::Mcp::Client`, which requires string
+   (or nil) values — would raise `TypeError` at startup.
+2. `Boukensha.run` computes `mcp_clients` (via `Tools::Mcp.register`) but
+   never uses it — unlike `Boukensha.repl`, which passes the same value
+   into `Repl.new(mcp_servers: mcp_clients)`. Harmless dead local, not a
+   crash.
+
+Unlike entry #34, `12_context`'s `Config#dig` doc comment was never stale
+here — it already reads `dig(:provider, :model)`, not `dig(:mud, ...)` —
+so that third issue doesn't recur in this step.
+
+**Fix:** none applied. Both are byte-identical to what `11_tui` actually
+has (verbatim port target for this delta), so fixing them only in
+`12_context` would diverge it from the step it's meant to track rather
+than carry it forward. Left flagged, same as entry #34 — worth a real fix
+in `11_tui` (then `10_standard_tool_library`) first, the next time either
+is touched with commit intent.
+
+**Files changed for this delta:**
+- `ruby/12_context/lib/boukensha/tools/mcp.rb` — new, copied verbatim from
+  `11_tui`.
+- `ruby/12_context/lib/boukensha/tools/mud.rb` — deleted (not kept as a
+  compatibility shim, matching `11_tui`'s own decision).
+- `ruby/12_context/lib/boukensha/registry.rb` — added `registered?`.
+- `ruby/12_context/lib/boukensha/config.rb` — replaced `mud_host`/
+  `mud_port`/`mud_username`/`mud_password` with `mcp_servers` +
+  `resolve_env`. `provider_type`/`model`/`system_prompt`/`agent_*`
+  accessors (this step's own shape, already diverged from `11_tui`'s
+  `tasks()`-hash approach) untouched.
+- `ruby/12_context/lib/boukensha.rb` — `run`/`repl` gained `mcp:`
+  (replacing `mud:`), removed `mud_opts_from_config`; `context_window:`,
+  `Models.context_window`, and compaction wiring untouched.
+- `ruby/12_context/lib/boukensha/repl.rb` — constructor takes
+  `mcp_servers:` instead of `mud:`; banner's `mud:` line replaced with
+  `mcp servers:`; `mud_status_string`/`probe_mud` (TCP-reachability
+  probing) replaced with `mcp_status_string` (reports already-connected
+  servers, no re-probing). `/compact`, `max_turn_tokens`, and all of this
+  step's own additions untouched.
+- `ruby/12_context/lib/boukensha_loader.rb` — legacy `MUD_NAME` env-var
+  path now builds an `mcp:` entry instead of the no-longer-accepted `mud:`
+  shape, same fix as `11_tui`'s copy.
+- `ruby/12_context/examples/example.rb` — off-by-one fix (entry #40) +
+  updated comments for `Tools::Mcp`/`mcp_servers:`.
+- `ruby/12_context/boukensha.gemspec` — `mud_manager` `~> 0.1` → `~> 0.3`.
+- `ruby/12_context/Gemfile.lock` — `mud_manager` bumped to `0.3.1` via
+  `bundle lock --update mud_manager --local`, which succeeded outright this
+  time (unlike `11_tui`'s hand-edit, `charm`/`bubbletea`/etc. are now
+  actually installed in this sandbox, confirming entry #35's point that
+  the gem set isn't static).
+- `ruby/12_context/README.md` — documented the carried-over `Tools::Mcp`
+  switch alongside this step's own context-tracking sections.
+- `ruby/12_context/boukensha-0.12.0.gem` — rebuilt (`gem build
+  boukensha.gemspec`) to pick up the gemspec's dependency bump.
+
+**Verified live**, without touching `~/.boukensharc` (still pointing at
+`11_tui` from entry #35 — left alone since it's outside this delta's
+scope), via `BOUKENSHA_PATH`/`-Ilib` against the real installed
+`mud_manager --mcp` binary and the repo's actual `~/.boukensha/settings.yaml`:
+- `Config#mcp_servers` parsed the real `mcp_servers:` list correctly.
+- `Registry#registered?("look")` correctly flipped `false` → `true` around
+  `Tools::Mcp.register`.
+- The MCP handshake succeeded and all 27 real MUD tools registered;
+  `registry.dispatch("look", {})` returned real CircleMUD room text.
+- `Boukensha.repl(tui: false, working_dir: false)` piped `/exit`: banner
+  correctly showed `mcp servers: mud (connected)`, clean shutdown
+  (`[mud_manager/mcp] server shutting down`, `Goodbye.`), no orphaned
+  `mud_manager` or `ruby` process afterward (`pgrep -af mud_manager` /
+  `pgrep -af "ruby.*boukensha"` both empty save the check itself).
+- The example.rb path fix confirmed via `File.expand_path` arithmetic to
+  land on the real `<repo-root>/.boukensha`.
+
+Not run: a full agent turn through `examples/example.rb` (would make a
+real, billed Anthropic API call) and the TUI (`tui: true`) mode — neither
+exercises anything this delta touches beyond what the `--no-tui` REPL
+check above already covers, since `Tui` wraps `Repl` without touching MCP
+wiring.
+
+### 42. Rebuilt and installed the `12_context` gem; pointed the `boukensha` command at it
+
+**What this is, in plain words:** there are two different ways to run this
+project — a) run the code straight from a step folder (what entry #41's
+checks did), or b) install it as a real Ruby "gem" (a packaged library)
+and run the plain `boukensha` command from anywhere, like a normal
+installed program. Step (b) hadn't been done yet for `12_context` — the
+newest installed gem was still `0.11.0` (from `11_tui`), and
+`~/.boukensharc` (a one-line file that says "run *this* step folder's
+code") still pointed at `11_tui` too. So typing plain `boukensha` was
+still running the old step, even though `12_context`'s code was already
+fixed in entry #41.
+
+**What was done, step by step:**
+
+1. **Made the launcher script runnable.** `bin/boukensha` inside
+   `12_context` didn't have its "executable" permission bit set yet
+   (`chmod +x bin/boukensha`). Without this, packaging the gem prints a
+   warning and the installed command wouldn't run.
+2. **Packaged the gem.** `gem build boukensha.gemspec`, run from inside
+   `ruby/12_context`. This just zips up the `lib/` folder and the launcher
+   script into one file, `boukensha-0.12.0.gem`, sitting right there in
+   the folder. It doesn't install or change anything system-wide by
+   itself.
+3. **Pointed the config at `12_context`.**
+   ```sh
+   echo /home/mahdi/claude-code-camp-2026-Q2/week1_baseline/ruby/12_context > ~/.boukensharc
+   ```
+   This one line is what decides which step folder's code actually runs
+   when you type `boukensha` — separate from which gem version is
+   installed (see entry #35 for why those two things are independent).
+   **This changes the earlier note in entry #41** that said
+   `~/.boukensharc` was "left alone, still pointing at `11_tui`" — that is
+   no longer true as of this entry; it now points at `12_context`.
+4. **Installed the gem.**
+   ```sh
+   gem install --user-install boukensha-0.12.0.gem
+   ```
+   `--user-install` was needed because the normal system location for
+   gems (`/var/lib/gems/3.2.0`) isn't writable by this user — it installs
+   to a per-user folder instead
+   (`~/.local/share/gem/ruby/3.2.0/`). Unlike `11_tui`'s original install
+   (entry #35's own build/install doc), `--ignore-dependencies` was **not**
+   needed this time — `charm` and everything it depends on (`bubbletea`,
+   `lipgloss`, etc.) are already installed in this sandbox, so RubyGems
+   found them on its own instead of hanging trying to download them.
+
+**Checked it actually worked:**
+- `gem list boukensha -a` now shows `0.12.0` as the newest installed
+  version, with `0.11.0`/`0.10.0`/`0.9.0` still there too (installing a
+  new version never removes old ones).
+- `gem contents boukensha -v 0.12.0` shows `tools/mcp.rb` bundled inside
+  and no `tools/mud.rb` — confirms the gem was actually rebuilt from the
+  current, fixed source, not an old cached copy.
+- Ran the real, installed command end-to-end:
+  ```sh
+  BOUKENSHA_DEBUG=1 boukensha --no-tui
+  ```
+  It printed `[boukensha] loading from: .../ruby/12_context` (confirming
+  the config repoint worked), showed the normal startup banner with
+  `mcp servers: mud (connected)`, and `/exit` shut down cleanly with no
+  leftover background process (checked with `pgrep -af mud_manager` and
+  `pgrep -af "ruby.*boukensha"` — both came back empty).
+
+**Why this matters / what to remember:** "the code is fixed" and "the
+installed command runs the fixed code" are two separate facts, and mixing
+them up is exactly the trap entry #35 already ran into once for `11_tui`.
+Whenever you finish changing a step's code and want the plain `boukensha`
+command to reflect it, you need *both* pieces done together: rebuild +
+install the gem, **and** make sure `~/.boukensharc`/`BOUKENSHA_PATH` points
+at that same step folder. Doing only one of the two silently leaves you
+running a mismatched combination.
+
+### 43. Launched `boukensha` — it worked. But went looking for a known weak spot anyway: when the MCP server fails, the error you see hides the real reason
+
+**Checked first, in plain words:** ran `boukensha` (both the plain
+`--no-tui` mode and the real TUI) several times, including two copies
+started almost at once. Every time: it connected to the MUD's MCP server,
+showed `mcp servers: mud (connected)` in the banner, and shut down
+cleanly with no leftover background process. So with today's real
+`~/.boukensha/settings.yaml`, there is **no startup failure to fix** — the
+config in this environment is fine.
+
+**But here's the weak spot, found by intentionally breaking the connection
+to check what error you'd actually see:**
+
+**Problem:** Boukensha's `Tools::Mcp.register` starts the MUD's MCP
+server as a background process (using the `mud_manager` gem). If that
+background process crashes right after starting — say, because the MUD
+host in `settings.yaml` is wrong, or the login details are wrong, or
+anything else goes wrong inside it — the error Boukensha shows you is
+always the exact same generic line, no matter what actually went wrong:
+```
+[boukensha] MCP server "mud" failed to start: MudManager::Mcp::Client::Error: server closed the connection
+```
+Proved this by pointing the MUD host at a made-up address that doesn't
+exist. The real reason (`SocketError: getaddrinfo: Name or service not
+known` — DNS lookup failed) was printed by the crashing process, but it
+went straight to the terminal's "error output" channel (stderr), completely
+separate from the message Boukensha itself shows. Nothing tied the two
+together, and in the real TUI (which takes over the whole screen), a
+stray line like that is very easy to miss or get overwritten. You'd be
+left staring at "server closed the connection" with zero clue why.
+
+**Fix — in `mud_manager`'s `Mcp::Client` class**
+(`week0_explore/mud_manager/lib/mud_manager/mcp/client.rb`, the shared
+library both `Tools::Mcp` and Boukensha depend on, `0.3.1` → `0.3.2`):
+- It used to start the background process with `Open3.popen2`, which
+  reads only the process's normal output and quietly throws away its
+  error output. Switched to `Open3.popen3`, which gives access to both.
+- Added a small background thread that continuously reads the process's
+  error output line by line: it both re-prints each line live (so you
+  still see normal messages like `"[mud_manager/mcp] server shutting
+  down"` right away, exactly like before) and keeps a copy of everything
+  seen so far.
+- When the process dies unexpectedly, the error Boukensha raises now
+  includes its exit code *and* everything it printed to its error output
+  — the real reason — instead of just "server closed the connection."
+
+**Caught and fixed my own mistake along the way:** the very first version
+of this fix (switch to `popen3`, only read the saved error output when
+something crashes) had a real regression — during a normal, successful
+run, the server's own routine messages (like the "shutting down" line
+above) stopped appearing anywhere at all, because nothing was reading that
+pipe unless there was a crash. Adding the always-on background thread
+(described above) fixed this: normal messages are visible again, live,
+exactly as before, while a crash still gets its message saved for the
+error report too. Caught by literally comparing "before this fix" output
+against "after this fix" output side by side for the successful case, not
+just testing the broken-host case in isolation — worth doing both checks
+any time a fix touches how output/logging works, not just whether the
+main feature still functions.
+
+**After the fix, the broken-host test now shows the real cause in one
+line, not just a generic failure:**
+```
+[boukensha] MCP server "mud" failed to start: MudManager::Mcp::Client::Error: server closed the connection — exit status 1 — stderr: .../mud_manager/session.rb:49:in `initialize': getaddrinfo: Name or service not known (SocketError)
+	from .../mud_manager/session.rb:49:in `new'
+	...
+```
+Now you can tell immediately it's a DNS/host problem, not a MUD
+login problem, a code bug, or anything else — no more guessing.
+
+**Rebuilt and reinstalled everything this touched, in order:**
+1. `cd week0_explore/mud_manager && gem build mud_manager.gemspec && gem install --user-install mud_manager-0.3.2.gem` — packages and installs the fixed shared library first, since everything else depends on it.
+2. `cd ruby/12_context && bundle lock --update mud_manager --local` — updates `Gemfile.lock` to record that `12_context` now uses `mud_manager 0.3.2`, not `0.3.1`.
+3. `gem build boukensha.gemspec && gem install --user-install boukensha-0.12.0.gem` — repackages and reinstalls `12_context`'s own gem so the newest installed `boukensha` matches the newest installed `mud_manager`.
+
+**Verified, with the real (working) config, after all of the above:**
+- `BOUKENSHA_DEBUG=1 boukensha --no-tui` and plain `boukensha` (real TUI):
+  both connect (`mcp servers: mud (connected)`), both print the normal
+  `"[mud_manager/mcp] server shutting down"` line on exit again, both shut
+  down clean with no leftover process (`pgrep -af mud_manager` /
+  `pgrep -af "ruby.*boukensha"` empty afterward).
+- `gem list mud_manager -a` / `gem list boukensha -a` show `0.3.2` /
+  `0.12.0` as the newest installed versions, older versions untouched.
+- Re-ran the broken-host test against the *actually installed* gem (not
+  just the local source file) to make sure the real, installed version
+  behaves the same way, not just my working copy.
+
+**Why / retain:** "it launches fine today" and "it will tell you why, the
+day it doesn't" are two different guarantees — the first was already
+true, the second wasn't, and this entry is about the second one. A
+generic catch-all error message (`rescue StandardError => e; warn
+"...#{e.class}: #{e.message}"`) is only as useful as what `e.message`
+actually contains — if the real detail lives somewhere the exception never
+looked (here, a separate process's stderr pipe), no amount of rewording
+the `warn` line fixes it; you have to go capture the detail at the source
+first. And second lesson, restated: never trust a "this looks fixed"
+check that only exercises the failure path — always re-run the success
+path too, right after, since that's exactly where this fix's own
+regression was hiding.
+
+### 44. Verified `12_context`'s context tracking and auto-compaction live, in a real terminal, with a real multi-step task
+
+**What this checks:** `12_context`'s whole point (see its `README.md`) is
+that the agent now keeps track of how much of its "context window" (the
+model's input-size limit) it has used, shows that to the user, and
+automatically trims old conversation history before it ever actually runs
+out of room. This entry proves all three of those actually happen, not
+just that the code looks right on paper.
+
+**How it was checked:** plain `tmux send-keys "<whole message>" Enter`
+dropped almost the entire message (same already-documented `bubbletea`
+input bug as entry #37 — a burst write, not a typing-speed problem).
+Worked around it the same already-documented way: send one character at a
+time with a small delay, `Enter` on its own afterward.
+```sh
+for (( i=0; i<${#MSG}; i++ )); do
+  tmux send-keys -t bouk_ctx -l -- "${MSG:$i:1}"
+  sleep 0.08
+done
+tmux send-keys -t bouk_ctx Enter
+```
+
+**Part 1 — normal-size window, a real multi-step MUD task:**
+Launched the real, installed `boukensha` (full TUI, default `context_window`
+of 200,000). Right after boot, both the "ready" line and the always-on
+status bar already showed `ctx 0/200.0k (0%)`. Sent: *"Connect to the MUD,
+look at your surroundings, check your score, then look at the exits."*
+While it worked, the live progress line updated in real time —
+`↑ 0 → 7.7k → 12.3k` (tokens sent so far this turn), `↓ 0 → 205 → 441`
+(tokens received back), `0 → 4 calls` — as it made 4 real tool calls
+across 3 iterations (connect, look, check score, look at exits) and
+returned one correct, multi-part answer (stats, condition, and the room's
+real exits). Once done: `ctx 0/200.0k (0%)` → `ctx 4.6k/200.0k (2%)`,
+`0 turns` → `1 turns`. A second message pushed it to `4.9k/200.0k (2%)`,
+`2 turns` — confirms the numbers accumulate across turns, not reset each
+time. Sending `/compact` by hand then correctly dropped 5 messages and
+reset the shown usage to `0/200.0k (0%)` while keeping the turn count.
+
+**Part 2 — proving *automatic* compaction fires on its own, not just
+`/compact`:** a normal 200,000-token window would take a very long, very
+expensive conversation to actually fill up 85% of on purpose. Instead,
+started a second session calling `Boukensha.repl` directly with a
+deliberately tiny `context_window: 2000` (same real code path, just a
+smaller number — this argument is exactly what `README.md`'s
+`context_window:` section documents). Even a one-word request already
+costs more than 2,000 tokens once the system prompt and all 32 tools'
+definitions are counted, so after turn 1 the display already read
+`ctx 3.8k/2.0k (190%)` with a `⚠` warning marker (this step's red/yellow/
+grey colour-coding, past the 85% "alert" threshold). Sent a second,
+unrelated one-word request — **without touching `/compact` at all** — and
+the conversation view showed `[context compacted — 1 messages dropped to
+free space]` appear on its own, right before that turn's reply, exactly
+matching `agent.rb`'s `compact_if_needed` (called at the very start of
+every turn, before the first API call of that turn).
+
+**Verified clean shutdown both times:** `pgrep -af mud_manager` /
+`pgrep -af "ruby.*boukensha"` empty after killing each `tmux` session —
+no leftover MCP subprocess either time.
+
+**Why / retain:** the tiny-`context_window` trick (part 2) is a cheap,
+fast, deterministic way to test a "only matters at 85%+ usage" code path
+without needing a real, long, expensive conversation to actually reach
+it — worth reusing for any future check of compaction/budget logic in
+this codebase, rather than trying to naturally exhaust a 200k window.

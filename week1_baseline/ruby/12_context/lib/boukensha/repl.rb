@@ -26,7 +26,7 @@ module Boukensha
 
     attr_reader :logger, :context, :model, :version
 
-    def initialize(context:, registry:, builder:, client:, logger:, config_dir: nil, provider: nil, model: nil, version: nil, api_key: nil, mud: nil, max_iterations: nil, max_turn_tokens: nil, max_output_tokens: nil)
+    def initialize(context:, registry:, builder:, client:, logger:, config_dir: nil, provider: nil, model: nil, version: nil, api_key: nil, mcp_servers: [], max_iterations: nil, max_turn_tokens: nil, max_output_tokens: nil)
       @context    = context
       @registry   = registry
       @builder    = builder
@@ -37,7 +37,7 @@ module Boukensha
       @model      = model
       @version    = version
       @api_key    = api_key
-      @mud        = mud
+      @mcp_servers = mcp_servers
       @max_iterations    = max_iterations
       @max_turn_tokens   = max_turn_tokens
       @max_output_tokens = max_output_tokens
@@ -58,16 +58,16 @@ module Boukensha
       config_exists = @config_dir && Dir.exist?(@config_dir)
       config_line   = config_exists ? @config_dir : "#{@config_dir || "(default)"}  ✗ directory not found"
       ver           = @version || "?.?.?"
-      mud_stat      = mud_status_string
+      mcp_stat      = mcp_status_string
 
       <<~BANNER
 
         ╔══════════════════════════════════════╗
         ║  BOUKENSHA MUD Assistant (v#{ver})#{" " * (9 - ver.length)}║
         ╚══════════════════════════════════════╝
-          config:    #{config_line}
-          provider:  #{provider_line}
-          mud:       #{mud_stat}
+          config:      #{config_line}
+          provider:    #{provider_line}
+          mcp servers: #{mcp_stat}
 
           /clear           reset conversation history
           /compact         free context (drop oldest messages)
@@ -156,35 +156,16 @@ module Boukensha
       end
     end
 
-    # Build the mud status string shown in the banner.
-    # Only checks TCP reachability — the tool session auto-connects at startup
-    # (in Mud.register), so probing login here would cause a double-login.
-    def mud_status_string
-      return "(not configured)" unless @mud
+    # Build the mcp-servers status string shown in the banner. A server
+    # only appears in @mcp_servers once its MCP handshake already
+    # succeeded (Tools::Mcp.register drops anything that failed to start),
+    # so this just reports what's already known — no re-probing, and
+    # therefore no risk of a double-login the way a fresh TCP/login probe
+    # would risk for a server backed by a single stateful session.
+    def mcp_status_string
+      return "(not configured)" if @mcp_servers.empty?
 
-      host     = @mud[:host] || "localhost"
-      port     = @mud[:port] || 4000
-      name     = @mud[:name]
-      password = @mud[:password]
-
-      "#{host}:#{port}  #{probe_mud(host, port, name, password)}"
-    end
-
-    def probe_mud(host, port, name, password)
-      require "socket"
-      require "timeout"
-
-      # TCP reachability only — the tool session auto-connects at startup,
-      # so we don't probe login here (that would cause a double-login on boot).
-      begin
-        Timeout.timeout(3) { TCPSocket.new(host, port).close }
-      rescue StandardError
-        return "✗ not reachable"
-      end
-
-      name && !name.to_s.strip.empty? ? "(Reachable)" : "(Reachable, no credentials)"
-    rescue StandardError => e
-      "✗ probe error: #{e.message}"
+      @mcp_servers.map { |s| "#{s[:name]} (connected)" }.join(", ")
     end
   end
 end
