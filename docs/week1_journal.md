@@ -256,8 +256,13 @@ its inverse, to rebuild a provider-specific assistant message on replay) —
 tools disabled rather than looping forever.
 
 **Go deeper:** `ruby/05_agent_loop/README.md`, `python/05_agent_loop/README.md`,
-[`week1_agent_loop_architecture.md`](week1_agent_loop_architecture.md) (how
-the pieces wire together, code-grounded),
+[`week1_agent_loop_explained.md`](week1_agent_loop_explained.md) (the fullest
+version of this section — tool registration, dispatch, `max_iterations`/
+`max_turn_tokens` and the wind-down call, and how to actually watch
+tool_call/tool_result "observations" happen via a real captured session
+log — start here if you only read one),
+[`week1_agent_loop_architecture.md`](week1_agent_loop_architecture.md) (the
+terser, more code-grounded companion),
 [`week1_agent_loop_port_plan.md`](week1_agent_loop_port_plan.md).
 
 ---
@@ -762,7 +767,7 @@ are relative to `docs/` unless otherwise noted.
 | Registry | [`week1_the_registry_port_plan.md`](week1_the_registry_port_plan.md) | [`week1_the_registry_review.md`](week1_the_registry_review.md) |
 | Prompt Builder | [`week1_prompt_builder_port_plan.md`](week1_prompt_builder_port_plan.md) | [`week1_prompt_builder_review.md`](week1_prompt_builder_review.md), [`week1_prompt_builder_python_review.md`](week1_prompt_builder_python_review.md), [`week1_prompt_builder_verification.md`](week1_prompt_builder_verification.md) |
 | API Client | [`week1_api_client_port_plan.md`](week1_api_client_port_plan.md) | [`week1_api_client_review.md`](week1_api_client_review.md), [`week1_api_client_python_review.md`](week1_api_client_python_review.md) |
-| Agent Loop | [`week1_agent_loop_port_plan.md`](week1_agent_loop_port_plan.md) | [`week1_agent_loop_architecture.md`](week1_agent_loop_architecture.md) |
+| Agent Loop | [`week1_agent_loop_port_plan.md`](week1_agent_loop_port_plan.md) | [`week1_agent_loop_architecture.md`](week1_agent_loop_architecture.md), [`week1_agent_loop_explained.md`](week1_agent_loop_explained.md) |
 | Logger | — | [`week1_logger_session_summary.md`](week1_logger_session_summary.md) |
 | Run DSL | — | [`week1_run_dsl_overview.md`](week1_run_dsl_overview.md) |
 | REPL Loop | — | [`week1_repl_loop_overview.md`](week1_repl_loop_overview.md), [`week1_repl_loop_review.md`](week1_repl_loop_review.md) |
