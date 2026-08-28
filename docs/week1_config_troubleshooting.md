@@ -1750,3 +1750,153 @@ this step broke — it's the same known gap, still open, by design.
 **Files changed for this iteration:** none in the repo.
 `docs/week1_global_executable_overview.md` — added §6, "Final acceptance
 check — launch, REPL, one real prompt."
+
+## `python/10_standard_tool_library` — Python port
+
+### 31. Two real bugs in the new `boukensha/tools/mcp.py`, both in failure-path cleanup — neither would show up on a clean handshake
+
+**Problem:** Port plan is
+[`10_standard_tool_library.md`](plans/python_port/10_standard_tool_library.md).
+Unlike entries #24/#26 (clean ports), this one surfaced two genuine bugs
+during offline verification — both in code paths that only run when an
+MCP server *fails* to start, so a happy-path smoke test alone would never
+have caught either, per [[feedback_port_review_rigor]].
+
+1. **`_register_one` spawned the `_McpClient` outside the `try` block**
+   that was supposed to catch startup failures. Ruby's
+   `Tools::Mcp.register_one` covers `Client.new` *and* the handshake
+   under one method-level `rescue StandardError` — a bad `command:`
+   (e.g. a typo'd executable) is exactly as much "this server failed to
+   start" as a handshake timeout is. The first Python draft only wrapped
+   the handshake call, so `_McpClient.__init__`'s `subprocess.Popen`
+   raising `FileNotFoundError` on a bad command propagated straight out
+   of `boukensha.tools.mcp.register(...)` instead of being warned-and-
+   skipped like every other server-startup failure. **Fix:** moved
+   `client = _McpClient(...)` inside the same `try` as the handshake.
+   Caught by deliberately registering a server with a nonexistent
+   executable and asserting `register()` returns `[]` rather than
+   raising — passed only after the fix.
+2. **The handshake-timeout cleanup path deadlocked the whole process.**
+   `_run_with_timeout` runs the handshake in a daemon thread and gives up
+   (raising `TimeoutError`) if it doesn't finish in time — but the
+   original failure-path cleanup then called `client.close()`, which
+   closes `self._proc.stdout` before waiting on the subprocess. If the
+   background thread is still blocked inside a live `stdout.readline()`
+   at that moment (which it is, for a server that's genuinely hung, not
+   just slow), Python's `io.BufferedReader.close()` blocks until it can
+   acquire an internal lock the blocked read is holding for the read's
+   entire duration — so `close()` waits forever too, and so does
+   everything after it. Reproduced by pointing a server entry at a
+   throwaway script that just calls `time.sleep(60)`: the whole test
+   process hung past a 20s external `timeout` wrapper with no output
+   after the "failed to start" warning line. **Fix:** added a separate
+   `_McpClient.kill()` — calls `self._proc.kill()` only, never touches
+   `stdin`/`stdout`, used specifically by the failure-path cleanup in
+   `_register_one` — instead of `close()` (which stays as the graceful
+   shutdown path used after a successful handshake, via `atexit`, when no
+   thread can still be blocked reading). Killing the process makes the OS
+   deliver EOF to the stuck read independently, so nothing in this
+   thread ever contends the same lock. Re-ran the same hung-server
+   reproduction after the fix: returns cleanly in ~2s (the configured
+   handshake timeout), confirmed via `pgrep` that no orphaned child
+   process survives.
+
+Neither bug is a translation-from-Ruby issue — Ruby's `Timeout.timeout`
++ synchronous `Client.new`/handshake has no equivalent background-thread
+lock-contention hazard, since everything runs on one thread there. Both
+are Python-specific consequences of using a real thread to implement the
+handshake timeout (see the port plan's Judgment call #3), caught only
+because the plan's verification section called for exercising the
+failure paths (bad command, hung server) directly rather than only the
+success path.
+
+**What else was verified (all passed, no further bugs found):**
+- `boukensha/tools/file_system.py`: all six tools (`pwd`, `list_directory`,
+  `read_file`, `write_file`, `delete_file`, `search_files`) exercised
+  against a temp directory, including the path-traversal guard
+  (`../../../etc/passwd` → `"error: ... escapes the working directory"`,
+  not an exception or an out-of-sandbox read).
+- `boukensha/tools/shell.py`: `allowed_commands` rejects a disallowed
+  executable before running anything; a real command's exit code and
+  combined stdout+stderr surface correctly; a genuine timeout is reported
+  and the immediate child process is actually killed (confirmed via
+  `pgrep`) — though, exactly as documented in the README's "Known
+  limitations," a `&`-backgrounded grandchild spawned by the timed-out
+  shell does survive, reproduced directly with `sleep 20 &`.
+- `boukensha/tools/mcp.py`'s env-merge fix (additive, not replacing, the
+  child's environment — see the port plan's translation notes) verified
+  against a stub JSON-RPC server: a custom `env:` var and `PATH` are
+  *both* visible inside the spawned process, proving `{**os.environ,
+  **env}` took effect rather than a bare `env=env` that would have
+  dropped `PATH` and broken spawning `mud_manager` by bare name.
+- Tool-name collision across two servers: unprefixed collision is
+  warned-and-skipped (registry keeps only the first registration);
+  setting `prefix:` on the second server's config avoids the collision
+  entirely (`stub2_echo`, `stub2_check_env`).
+- `Registry.registered()`, `Context(working_dir=...)` (including that
+  `working_dir=False`/omitted both correctly produce `None`, matching
+  Ruby's `working_dir ? ... : nil` on a falsy value), `Config.mcp_servers()`
+  against the repo's real `.boukensha/settings.yaml` (confirms `mud_host`/
+  `mud_port`/etc. are gone, `mcp_servers()` returns the expected
+  `{name, command, env, prefix}` shape) — all direct unit-level checks,
+  no bugs found.
+- **Real, live MCP round trip** against the actual installed
+  `mud_manager --mcp` binary (not a stub): handshake returns
+  `serverInfo`, `tools/list` returns all 27 real MUD tools
+  (`mud_connect`, `look`, `check`, etc.), and — since a real CircleMUD
+  happened to be listening on `localhost:4000` in this environment — a
+  full `mud_connect` → `look` → `check(score)` → `check(exits)` sequence
+  through `Registry.dispatch` returned real, in-character MUD output for
+  each call.
+- **Full live end-to-end run** via
+  `python/10_standard_tool_library/examples/example.py` against the real
+  Anthropic API (`claude-haiku-4-5`): the agent connected to the MUD via
+  the MCP-backed `mud_connect` tool, looked around, checked its score and
+  exits, and completed in `turn_end reason: completed, iterations=2` —
+  confirmed from the actual `.boukensha/sessions/<id>.jsonl`, matching
+  the shape of Ruby's own verified `10_standard_tool_library` session
+  (per `docs/week1_standard_tool_library_review.md`).
+- Confirmed the three regressions present in Ruby's own
+  `10_standard_tool_library` (2-tier `resolve_dir`, no 401-specific
+  `ApiError` message, no OpenAI `provider_name` special case — see the
+  port plan's "Cross-check" section) were **not** carried backward:
+  `client.py`, `logger.py`, and `agent.py` in the new
+  `python/10_standard_tool_library` tree are byte-identical to
+  `python/08_the_repl_loop`'s (`diff -q` confirms), so all three fixes
+  from earlier iterations remain intact.
+
+**Why / retain:** same lesson as entry #26's closing note, sharpened —
+"the code path only runs on failure" is exactly where bugs hide in a
+port, because a working demo run never exercises it. Both bugs here were
+caught only by deliberately constructing failure inputs (a bad command,
+a hung server) rather than only running the happy-path live smoke test.
+For any future MCP or subprocess-based tool work in this codebase:
+**never call a blocking `.close()`-style cleanup from a thread that
+didn't do the corresponding I/O, without confirming no other thread can
+still be blocked on the same file object** — kill first if there's any
+doubt, then clean up file handles once the process is confirmed dead.
+
+**Files changed for this iteration:**
+- `week1_baseline/python/10_standard_tool_library/` — new, copied from
+  `python/08_the_repl_loop` (step 09 skipped for Python — see the port
+  plan's "Why 09 is skipped").
+- `boukensha/tools/__init__.py`, `file_system.py`, `shell.py`, `mcp.py` —
+  all new.
+- `boukensha/registry.py` — added `registered()`.
+- `boukensha/context.py` — added `working_dir`.
+- `boukensha/config.py` — replaced `mud_host`/`mud_port`/`mud_username`/
+  `mud_password` with `mcp_servers()` + `_resolve_env()`.
+- `boukensha/repl.py` — `mcp_servers` param, banner gains an
+  `mcp servers:` line.
+- `boukensha/__init__.py` — `run()`/`repl()` gained `working_dir`,
+  `allowed_commands`, `shell_timeout`, `mcp` keyword args; wired up
+  `tools.file_system`/`tools.shell`/`tools.mcp` registration.
+- `boukensha/version.py` — `VERSION = "0.10.0"`.
+- `examples/example.py` — rewritten for the MUD/MCP demo.
+- `README.md` — rewritten for Step 10, including a translated "Known
+  limitations" section.
+- `week1_baseline/bin/python/10_standard_tool_library` — new runner,
+  `chmod u+x`.
+
+Full port plan is in
+[`10_standard_tool_library.md`](plans/python_port/10_standard_tool_library.md).
