@@ -17,5 +17,9 @@ module Boukensha
       raise UnknownToolError, "No tool registered as '#{name}'" unless tool
       tool.block.call(**args.transform_keys(&:to_sym))
     end
+
+    def registered?(name)
+      @context.tools.key?(name.to_s)
+    end
   end
 end

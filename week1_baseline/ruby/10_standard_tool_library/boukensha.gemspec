@@ -19,8 +19,12 @@ Gem::Specification.new do |spec|
   spec.bindir      = "bin"
   spec.executables = ["boukensha"]
 
-  # MUD session management and CircleMUD command primitives.
-  spec.add_dependency "mud_manager", "~> 0.1"
+  # MUD gameplay, via an MCP client — mud_manager's bundled MCP server
+  # (MudManager::Mcp, part of this gem since 0.2.0) is the one that talks
+  # to CircleMUD; this process never does. ~> 0.3 specifically because
+  # MudManager::Mcp::Client's own default command changed there (installed
+  # `mud_manager --mcp` executable, not `ruby <path-to-script>`).
+  spec.add_dependency "mud_manager", "~> 0.3"
 
   # net/http and json are stdlib. Users supply their own ANTHROPIC_API_KEY.
 end

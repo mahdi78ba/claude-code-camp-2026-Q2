@@ -3,10 +3,11 @@
 #
 # Step 10 — A Standard Tool Library (MUD demo)
 #
-# Demonstrates Boukensha::Tools::Mud, which registers gameplay tools against
-# a live CircleMUD connection. Connection credentials come from
-# ~/.boukensha/settings.yaml (mud: host/port/username/password) by default.
-# Set BOUKENSHA_DIR to point at a different config directory.
+# Demonstrates Boukensha::Tools::Mcp, which registers gameplay tools by
+# proxying an MCP server (the mud_manager gem's bundled one, by default).
+# Connection credentials come from ~/.boukensha/settings.yaml's
+# mcp_servers: list by default. Set BOUKENSHA_DIR to point at a different
+# config directory.
 #
 # You can still override individual values as keyword arguments:
 #
@@ -28,5 +29,5 @@ Boukensha.run(
         "then look at the available exits and tell me what you see.",
   # system/model/api_key all come from config automatically
   working_dir: false   # no filesystem tools needed for MUD play
-  # mud: comes from config (settings.yaml mud: block) automatically
+  # mcp: comes from config (settings.yaml mcp_servers: list) automatically
 )

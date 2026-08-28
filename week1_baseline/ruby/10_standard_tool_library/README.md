@@ -66,6 +66,14 @@ ruby examples/demo.rb
 BOUKENSHA_PATH=~/Sites/boukensha/10_standard_tool_library boukensha
 ```
 
+Running plain `boukensha` (no `BOUKENSHA_PATH`) instead falls through to
+`~/.boukensharc` — a floating artifact carried forward from step 09, not
+part of this repo. If it's still pointing at an older step, `boukensha`
+will silently run that step's code instead of this one, gem version
+notwithstanding. See
+[`docs/plans/floating_artifacts/boukensharc.md`](../../../docs/plans/floating_artifacts/boukensharc.md)
+for what it is and how to update it.
+
 ## Technical observations (from testing this step)
 
 - **`mud_manager` isn't on rubygems.org.** `boukensha.gemspec` declares
@@ -120,9 +128,13 @@ for the full code-level review this was drawn from.
   failures. Not fatal — `Agent#handle_tool_calls` rescues `StandardError` and
   turns it into an `"ERROR: ArgumentError: ..."` tool result — but the error
   *shape* differs from every other failure mode these tools produce.
-- **`Tools::Mud.register` has a side effect the other two modules don't**: it
-  opens a real socket and logs in during registration (agent setup), before
-  the first model call, rather than lazily on first tool use like
+- **MUD tool registration has a side effect the other two modules don't**:
+  it opens a real socket and logs in during registration (agent setup),
+  before the first model call, rather than lazily on first tool use like
   `FileSystem`/`Shell`. Failure degrades gracefully (rescued + `warn`,
   `mud_connect` still available manually), but every `Boukensha.run`/`.repl`
-  with a configured `mud_host` pays that connection cost up front.
+  with a configured MCP server pays that connection cost up front.
+  (Originally written about `Tools::Mud.register`/`config.mud_host`,
+  since replaced by `Tools::Mcp.register`/`config.mcp_servers` — see
+  `docs/week1_mcp_standard_tool_library_integration.md` — but this
+  specific behavior carried over unchanged into the MCP-backed server.)

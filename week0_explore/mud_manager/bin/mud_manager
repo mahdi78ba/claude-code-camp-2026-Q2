@@ -1,0 +1,54 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+#
+# mud_manager's CLI entry point. Currently supports one mode:
+#
+#   --mcp   run as an MCP server (JSON-RPC 2.0, newline-delimited) over
+#           stdin/stdout, exposing gameplay as MCP tools so any MCP-capable
+#           client, in any language, gets full MUD gameplay without
+#           requiring this gem, a telnet client, or CircleMUD command
+#           syntax itself.
+#
+# Once this gem is installed (`gem install`), RubyGems puts a proper
+# executable stub for this file on $PATH — invoke it as `mud_manager --mcp`
+# directly, not `ruby /path/to/this/file --mcp`. MudManager::Mcp::Client's
+# own default command relies on exactly that.
+#
+# Config for --mcp comes from the environment, not from a caller-side
+# settings file — this process, not whichever agent connects to it, owns
+# the MUD session and its credentials (mirrors this gem's own
+# examples/live_session_test.rb precedent):
+#
+#   MUD_HOST      default: localhost
+#   MUD_PORT      default: 4000
+#   MUD_NAME      required
+#   MUD_PASSWORD  required
+#
+# Run directly:
+#   MUD_NAME=dummy MUD_PASSWORD=helloworld mud_manager --mcp
+#
+# Or let MudManager::Mcp::Client spawn it (see examples/mcp_client_demo.rb).
+
+unless ARGV.include?("--mcp")
+  abort "mud_manager: pass --mcp to run as an MCP server (no other mode is implemented yet)\n" \
+        "  usage: mud_manager --mcp"
+end
+
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+require "mud_manager"
+require "mud_manager/mcp"
+
+def env_or_abort(key)
+  ENV.fetch(key) { abort "mud_manager --mcp: #{key} is required (set it in the environment)" }
+end
+
+dispatcher = MudManager::Mcp::Dispatcher.new
+session = MudManager::Mcp::Tools.register(
+  dispatcher,
+  host:     ENV.fetch("MUD_HOST", "localhost"),
+  port:     Integer(ENV.fetch("MUD_PORT", "4000")),
+  name:     env_or_abort("MUD_NAME"),
+  password: env_or_abort("MUD_PASSWORD")
+)
+
+MudManager::Mcp::Server.new(dispatcher, session: session).run

@@ -1,12 +1,22 @@
 require "mud_manager"
 
-module Boukensha
-  module Tools
-    # Mud registers MUD-gameplay tools against a registry.
+module MudManager
+  module Mcp
+    # Tools registers every MUD-gameplay tool against an MCP Dispatcher.
     #
-    # A single MudManager::Session is created when the tools are registered and
-    # shared by every tool via closure — the agent logs in once and reuses the
-    # connection for all subsequent tool calls.
+    # This is the MCP-side twin of Boukensha::Tools::Mud (the original,
+    # since-removed in-process version — see
+    # docs/week1_mcp_standard_tool_library_integration.md) — same tool names,
+    # descriptions, parameters, and handler bodies, registered against
+    # `dispatcher.tool` instead of a Boukensha registry. The
+    # MudManager::Session and MudManager::Primitives calls underneath are
+    # exactly what the rest of this gem already provides — this module is
+    # just another consumer of them, living in the same gem now instead of a
+    # separate one that depended on it.
+    #
+    # A single MudManager::Session is created when the tools are registered
+    # and shared by every tool via closure — the server logs in once and
+    # reuses the connection for every subsequent tools/call.
     #
     # Tools registered (grouped by concern):
     #
@@ -55,16 +65,18 @@ module Boukensha
     #
     # Usage:
     #
-    #   Boukensha::Tools::Mud.register(
-    #     registry,
+    #   session = MudManager::Mcp::Tools.register(
+    #     dispatcher,
     #     host:     "localhost",
     #     port:     4000,
     #     name:     "Gandalf",
     #     password: "secret"
     #   )
     #
-    module Mud
-      def self.register(registry, host: "localhost", port: 4000, name:, password:)
+    # Returns the MudManager::Session, so the caller (the MCP Server) can
+    # close it gracefully on shutdown.
+    module Tools
+      def self.register(dispatcher, host: "localhost", port: 4000, name:, password:)
         session = MudManager::Session.new(host: host, port: port)
         p       = MudManager::Primitives
 
@@ -81,8 +93,8 @@ module Boukensha
           session.read_until_prompt
         end
 
-        # Return an error string if the session is not open so the agent
-        # can decide whether to call mud_connect first.
+        # Return an error string if the session is not open so the client can
+        # decide whether to call mud_connect first.
         guard = lambda do
           unless session.open?
             "error: not connected — call mud_connect first"
@@ -91,7 +103,7 @@ module Boukensha
 
         # ── Connection ─────────────────────────────────────────────────────
 
-        registry.tool "mud_connect",
+        dispatcher.tool "mud_connect",
           description: "Open the connection to the MUD server and log in with the configured " \
                        "character name and password. Safe to call when already connected " \
                        "(returns current status instead of reconnecting).",
@@ -109,7 +121,7 @@ module Boukensha
           end
         end
 
-        registry.tool "mud_disconnect",
+        dispatcher.tool "mud_disconnect",
           description: "Close the connection to the MUD server gracefully.",
           parameters: {} do
           if session.open?
@@ -120,7 +132,7 @@ module Boukensha
           end
         end
 
-        registry.tool "mud_status",
+        dispatcher.tool "mud_status",
           description: "Return whether the MUD session is currently connected.",
           parameters: {} do
           session.open? ? "connected to #{session.host}:#{session.port}" : "disconnected"
@@ -128,7 +140,7 @@ module Boukensha
 
         # ── Perception ──────────────────────────────────────────────────────
 
-        registry.tool "look",
+        dispatcher.tool "look",
           description: "Look at the current room or at a specific target. " \
                        "Call with NO arguments to describe the current room (do NOT pass target: 'room'). " \
                        "Pass a target to inspect a specific item, mob, or player (e.g. target: 'sword'). " \
@@ -146,7 +158,7 @@ module Boukensha
           end
         end
 
-        registry.tool "examine",
+        dispatcher.tool "examine",
           description: "Examine a target in detail (more verbose than look).",
           parameters: {
             target: { type: "string", description: "The item, mob, or player to examine" }
@@ -159,7 +171,7 @@ module Boukensha
           end
         end
 
-        registry.tool "check",
+        dispatcher.tool "check",
           description: "Query information about your character or surroundings. " \
                        "Kinds: score, inventory, equipment, gold, exits, time, weather, " \
                        "levels, wimpy, toggle, where.",
@@ -176,7 +188,7 @@ module Boukensha
 
         # ── Movement ────────────────────────────────────────────────────────
 
-        registry.tool "move",
+        dispatcher.tool "move",
           description: "Move in a compass direction or up/down.",
           parameters: {
             direction: { type: "string", description: "Direction: north | east | south | west | up | down" }
@@ -189,14 +201,14 @@ module Boukensha
           end
         end
 
-        registry.tool "flee",
+        dispatcher.tool "flee",
           description: "Attempt to flee from combat in a random available direction.",
           parameters: {} do
           next guard.call if guard.call
           send_cmd.call(p.flee)
         end
 
-        registry.tool "set_position",
+        dispatcher.tool "set_position",
           description: "Change body position. Use 'rest' or 'sleep' between fights to recover " \
                        "HP and mana. Must be standing to move or fight.",
           parameters: {
@@ -210,7 +222,7 @@ module Boukensha
           end
         end
 
-        registry.tool "track",
+        dispatcher.tool "track",
           description: "Attempt to track a mob or player by name, revealing which direction " \
                        "they are in. Requires the Track skill.",
           parameters: {
@@ -226,7 +238,7 @@ module Boukensha
 
         # ── Combat ──────────────────────────────────────────────────────────
 
-        registry.tool "attack",
+        dispatcher.tool "attack",
           description: "Attack a target. Style 'kill' is the standard approach; " \
                        "'murder' bypasses the mercy check; 'hit' is a one-off strike.",
           parameters: {
@@ -241,7 +253,7 @@ module Boukensha
           end
         end
 
-        registry.tool "skill_strike",
+        dispatcher.tool "skill_strike",
           description: "Use a combat skill against a target.",
           parameters: {
             skill:  { type: "string", description: "Skill: bash | kick | backstab | rescue | assist" },
@@ -255,7 +267,7 @@ module Boukensha
           end
         end
 
-        registry.tool "consider",
+        dispatcher.tool "consider",
           description: "Assess a mob's relative strength before engaging in combat. " \
                        "Returns a phrase such as 'You could kill it easily' or " \
                        "'Death awaits you'. Always consider before attacking an unknown mob.",
@@ -272,7 +284,7 @@ module Boukensha
 
         # ── Communication ───────────────────────────────────────────────────
 
-        registry.tool "say",
+        dispatcher.tool "say",
           description: "Speak or emote in the current room.",
           parameters: {
             text: { type: "string", description: "What to say or emote" },
@@ -286,7 +298,7 @@ module Boukensha
           end
         end
 
-        registry.tool "tell",
+        dispatcher.tool "tell",
           description: "Send a private message to a specific player.",
           parameters: {
             target: { type: "string", description: "Player name to message" },
@@ -301,7 +313,7 @@ module Boukensha
           end
         end
 
-        registry.tool "channel_say",
+        dispatcher.tool "channel_say",
           description: "Broadcast a message over a global channel.",
           parameters: {
             channel: { type: "string", description: "Channel: shout | gossip | auction | grats | holler" },
@@ -317,7 +329,7 @@ module Boukensha
 
         # ── Inventory & equipment ────────────────────────────────────────────
 
-        registry.tool "get_item",
+        dispatcher.tool "get_item",
           description: "Pick up an item from the room or from a container.",
           parameters: {
             item:      { type: "string",  description: "Name of the item to get" },
@@ -332,7 +344,7 @@ module Boukensha
           end
         end
 
-        registry.tool "drop_item",
+        dispatcher.tool "drop_item",
           description: "Drop, donate, or junk an item.",
           parameters: {
             item:  { type: "string",  description: "Name of the item" },
@@ -347,7 +359,7 @@ module Boukensha
           end
         end
 
-        registry.tool "put_item",
+        dispatcher.tool "put_item",
           description: "Put an item into a container.",
           parameters: {
             item:      { type: "string",  description: "Name of the item to put" },
@@ -362,7 +374,7 @@ module Boukensha
           end
         end
 
-        registry.tool "equip_item",
+        dispatcher.tool "equip_item",
           description: "Wear, wield, hold, grab, or remove an item.",
           parameters: {
             item:     { type: "string", description: "Name of the item" },
@@ -377,7 +389,7 @@ module Boukensha
           end
         end
 
-        registry.tool "consume_item",
+        dispatcher.tool "consume_item",
           description: "Eat, drink, taste, or sip a consumable item.",
           parameters: {
             item: { type: "string", description: "Name of the item to consume" },
@@ -393,7 +405,7 @@ module Boukensha
 
         # ── Magic ────────────────────────────────────────────────────────────
 
-        registry.tool "cast_spell",
+        dispatcher.tool "cast_spell",
           description: "Cast a spell, optionally at a target.",
           parameters: {
             spell:  { type: "string", description: "Full spell name (e.g. 'cure light wounds', 'magic missile')" },
@@ -407,7 +419,7 @@ module Boukensha
           end
         end
 
-        registry.tool "use_magic_item",
+        dispatcher.tool "use_magic_item",
           description: "Activate a magic item: quaff a potion, recite a scroll, or use a wand/staff.",
           parameters: {
             item:        { type: "string", description: "Name of the item to activate" },
@@ -424,7 +436,7 @@ module Boukensha
 
         # ── Utility ──────────────────────────────────────────────────────────
 
-        registry.tool "shop",
+        dispatcher.tool "shop",
           description: "Interact with a shop NPC: list stock, buy, sell, or get the value of an item.",
           parameters: {
             action: { type: "string", description: "Action: list | buy | sell | value | offer" },
@@ -438,7 +450,7 @@ module Boukensha
           end
         end
 
-        registry.tool "practice",
+        dispatcher.tool "practice",
           description: "List your known skills at a guildmaster, or practice a specific skill.",
           parameters: {
             skill: { type: "string", description: "Skill name to practice (omit to list all)" }
@@ -447,14 +459,14 @@ module Boukensha
           send_cmd.call(p.practice(skill))
         end
 
-        registry.tool "save_character",
+        dispatcher.tool "save_character",
           description: "Save your character to disk so progress is not lost on disconnect.",
           parameters: {} do
           next guard.call if guard.call
           send_cmd.call(p.save_char)
         end
 
-        registry.tool "send_raw",
+        dispatcher.tool "send_raw",
           description: "Send an arbitrary command string to the MUD and return the response. " \
                        "Use this as an escape hatch when no structured tool fits.",
           parameters: {
@@ -466,15 +478,16 @@ module Boukensha
         end
 
         # Auto-connect at startup so the session is ready immediately and the
-        # agent doesn't need to waste a turn calling mud_connect first.
+        # first tools/call doesn't have to pay the login round-trip.
         begin
           session.open
           session.login(name, password)
         rescue MudManager::Session::Error => e
-          warn "[boukensha] MUD auto-connect failed: #{e.message} — call mud_connect manually"
+          warn "[mud_manager/mcp] MUD auto-connect failed: #{e.message} — call mud_connect manually"
         end
 
+        session
       end # def self.register
-    end # Mud
-  end # Tools
-end # Boukensha
+    end # Tools
+  end # Mcp
+end # MudManager

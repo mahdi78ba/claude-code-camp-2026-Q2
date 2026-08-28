@@ -8,8 +8,18 @@ tasks:
     prompt_override:
       system: true
 
-mud:
-  host: localhost
-  port: 4000
-  username: dummy
-  password: helloworld
+# MCP servers to register tools from. `command` launches the *installed*
+# mud_manager executable directly (gem install puts it on $PATH) with its
+# --mcp flag, not `ruby /path/to/repo/.../bin/...` — the command doesn't
+# depend on where this repo happens to be checked out, only on the gem
+# being installed. An env value written as "$VAR" resolves against the
+# environment (.env) instead of being taken literally — not needed for
+# this throwaway test account, so it's a plain literal here.
+mcp_servers:
+  - name: mud
+    command: ["mud_manager", "--mcp"]
+    env:
+      MUD_HOST: localhost
+      MUD_PORT: "4000"
+      MUD_NAME: dummy
+      MUD_PASSWORD: helloworld
