@@ -498,6 +498,13 @@ small, hand-rolled MCP client (newline-delimited JSON-RPC over stdio) that
 spawns and speaks to the exact same `mud_manager --mcp` server process; only
 the *client* is reimplemented, not the server.
 
+**How many MCP servers does this actually run, and how do you add one?**
+Exactly **one** is configured right now (`mud`, 27 tools) — but the bridge
+above is generic, so adding any other MCP server (the repo does *not* ship
+an `mcp_filesystem` server — filesystem access here is a native tool set,
+not MCP) is a one-line `settings.yaml` addition, no code. Full walkthrough:
+[`week1_mcp_servers_and_agent_components_explained.md`](week1_mcp_servers_and_agent_components_explained.md).
+
 ---
 
 ## The Terminal UI (iteration 11)
@@ -806,6 +813,8 @@ are relative to `docs/` unless otherwise noted.
 | Doc | What it's for |
 |---|---|
 | [`week1_components_explained.md`](week1_components_explained.md) | How every object fits together — read this first |
+| [`week1_agent_loop_explained.md`](week1_agent_loop_explained.md) | Tool registration/dispatch, stop conditions, watching tool_call/tool_result |
+| [`week1_mcp_servers_and_agent_components_explained.md`](week1_mcp_servers_and_agent_components_explained.md) | How many MCP servers we run, how to add any server, the Agent's own dependency schema |
 | [`week1_context_management_explained.md`](week1_context_management_explained.md) | Context/compaction concept + full walkthrough |
 | [`week1_tui_explained.md`](week1_tui_explained.md) | What a TUI is + how boukensha's is built |
 | [`week1_config_troubleshooting.md`](week1_config_troubleshooting.md) | Living Problem → Fix → Why log, every environment/code issue hit |
